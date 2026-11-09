@@ -13,6 +13,7 @@
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-star" viewBox="0 0 12 12"><path d="M6 .8l1.6 3.4 3.7.4-2.8 2.5.8 3.7L6 8.9 2.7 10.8l.8-3.7L.7 4.6l3.7-.4z" fill="currentColor"/></symbol>
   <symbol id="i-out" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3L7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 12 12"><path d="M4 2.5L7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
   <symbol id="i-close" viewBox="0 0 16 16"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
 </svg>
 
@@ -30,6 +31,33 @@
   </ol>
   <p class="key" aria-hidden="true"><span><i class="sw wait"></i>photos waiting, denser = more</span><span><i class="sw conflict"></i>retrying or not published</span></p>
 </section>
+
+<!-- Demo controls: shown only when the gateway runs with DEMO_CONTROLS=1.
+     A loose leaf on the record, not part of Keeper; demo.js drives it. -->
+<details class="demo" id="demo" hidden open>
+  <summary>
+    <span class="demo-title"><svg width="12" height="12" aria-hidden="true"><use href="#i-chev"/></svg>Demo controls</span>
+    <span class="demo-note">Not part of Keeper. Breaks the Lightroom mock on purpose.</span>
+    <span class="demo-state" id="demo-state">Reading the Lightroom mock…</span>
+  </summary>
+  <div class="demo-body">
+    <div class="demo-faults" role="group" aria-label="Lightroom mock faults">
+      <button class="toggle" id="f-503" type="button" aria-pressed="false" data-fault="error"><span>Lightroom 503</span><span class="t-state" aria-hidden="true">Off</span></button>
+      <button class="toggle" id="f-slow" type="button" aria-pressed="false" data-fault="latency"><span>Latency 3 s</span><span class="t-state" aria-hidden="true">Off</span></button>
+      <button class="toggle heal" id="f-heal" type="button"><span>Heal</span></button>
+    </div>
+    <div class="demo-proof">
+      <dl class="readings" id="demo-readings">
+        <div><dt>Assets in mock</dt><dd id="d-assets">–</dd></div>
+        <div><dt>Published by Keeper</dt><dd id="d-published">–</dd></div>
+        <div><dt>Replays absorbed</dt><dd id="d-replays">–</dd></div>
+        <div><dt>Faults injected</dt><dd id="d-injected">–</dd></div>
+      </dl>
+      <p class="verdict" id="demo-verdict" aria-live="polite"></p>
+    </div>
+    <p class="demo-hint">Stop the scorer from a terminal: <code>docker compose stop scorer</code>, then <code>docker compose start scorer</code></p>
+  </div>
+</details>
 
 <main class="work">
   <section class="bursts" id="bursts" aria-label="Bursts, newest first">

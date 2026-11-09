@@ -171,6 +171,59 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
     repeating-linear-gradient(135deg, transparent 0 2px, var(--ink) 2px 3px);
 }
 
+/* ── demo controls: a loose leaf laid on the record, not part of Keeper ──
+   Raised sheet paper inside a full ink border, so it reads as a separate
+   leaf; the title and note say in words that it is a demo control. Toggles
+   borrow the trace action's ink bar and cell; "On" is ink fill plus the word. */
+.demo { margin: 18px var(--gutter) 0; border: 1px solid var(--rule-strong); background: var(--raised); }
+.demo[hidden] { display: none; }
+.demo > summary {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px;
+  padding: 11px 14px 10px; cursor: pointer; list-style: none;
+}
+.demo > summary::-webkit-details-marker { display: none; }
+.demo[open] > summary { border-bottom: 1px solid var(--rule); }
+.demo-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 11.5px/1.2 var(--cond); font-stretch: 70%;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink);
+}
+.demo-title svg { transition: transform .2s var(--ease); }
+.demo[open] .demo-title svg { transform: rotate(90deg); }
+.demo-note { font-size: 13.5px; color: var(--ink-2); }
+.demo-state { margin-left: auto; font-size: 13.5px; text-align: right; }
+.demo-state b { font-weight: 600; }
+
+.demo-body {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start;
+  gap: 14px 32px; padding: 14px;
+}
+.demo-faults { display: flex; flex-wrap: wrap; gap: 8px; }
+.toggle {
+  display: inline-flex; align-items: stretch; min-height: 44px;
+  box-shadow: inset 0 0 0 1px var(--ink);
+  font: 600 13px/1 var(--cond); font-stretch: 75%; letter-spacing: .14em; text-transform: uppercase;
+}
+.toggle > span { display: grid; place-items: center; padding: 0 14px; }
+.toggle .t-state { min-width: 52px; padding: 0 10px; box-shadow: inset 1px 0 0 var(--ink); color: var(--ink-2); }
+.toggle:hover > span:first-child { text-decoration: underline; text-underline-offset: 4px; }
+.toggle[aria-pressed="true"] { background: var(--ink); color: var(--ground); }
+.toggle[aria-pressed="true"] .t-state { color: var(--ground); box-shadow: inset 1px 0 0 var(--z5); }
+.toggle[aria-busy="true"] { cursor: progress; }
+.toggle[aria-disabled="true"] { color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--rule); cursor: default; }
+.toggle[aria-disabled="true"]:hover > span:first-child { text-decoration: none; }
+
+.readings { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0; }
+.readings div { display: grid; gap: 2px; }
+.readings dt {
+  font: 600 11.5px/1.2 var(--cond); font-stretch: 70%;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2);
+}
+.readings dd { margin: 0; font: 500 17px/1.3 var(--mono); }
+.verdict { margin-top: 6px; font-size: 13.5px; max-width: 72ch; }
+.demo-hint { grid-column: 1 / -1; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 12.5px; color: var(--ink-2); }
+.demo-hint code { font: 400 12.5px/1.45 var(--mono); color: var(--ink); white-space: nowrap; user-select: all; }
+
 /* ── work area ───────────────────────────────────────── */
 .work {
   display: grid;
@@ -351,7 +404,15 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   }
 }
 
+@media (max-width: 860px) {
+  .demo-body { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 640px) {
+  .demo { margin-top: 14px; }
+  .demo-state { margin-left: 0; text-align: left; flex-basis: 100%; }
+  .demo-faults .toggle { flex: 1 1 100%; }
+  .demo-faults .toggle > span:first-child { flex: 1; }
   .top { flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 14px; }
   .status { margin-left: 0; text-align: left; }
   .stages { grid-template-columns: repeat(2, 1fr); }
