@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // HTTP talks to the Adobe-shaped API of cmd/lightroom-mock (paths as in
@@ -19,8 +16,7 @@ import (
 type HTTP struct {
 	baseURL   string
 	catalogID string
-	timeout   time.Duration
-	client    *http.Client
+	caller
 }
 
 var _ Client = (*HTTP)(nil)
@@ -33,21 +29,9 @@ func NewHTTP(baseURL, catalogID string, timeout time.Duration) *HTTP {
 	return &HTTP{
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		catalogID: catalogID,
-		timeout:   timeout,
-		client: &http.Client{
-			Transport: otelhttp.NewTransport(http.DefaultTransport,
-				// Semconv client span name: "{method} {url.template}".
-				otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-					if t, ok := r.Context().Value(templateKey{}).(string); ok {
-						return r.Method + " " + t
-					}
-					return r.Method
-				})),
-		},
+		caller:    caller{client: tracedClient(), timeout: timeout},
 	}
 }
-
-type templateKey struct{}
 
 const assetTemplate = "/v2/catalogs/{catalog_id}/assets/{asset_id}"
 
@@ -114,47 +98,8 @@ func (c *HTTP) SetRating(ctx context.Context, assetID string, rating int) error 
 	return err
 }
 
-// do sends one request with the per-call timeout and decodes a 2xx JSON
-// body into out (if non-nil). Non-2xx answers become *StatusError.
 func (c *HTTP) do(ctx context.Context, op, method, template, u, contentType string,
 	body io.Reader, size int64, out any,
 ) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	ctx = context.WithValue(ctx, templateKey{}, template)
-
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
-	if err != nil {
-		return 0, err
-	}
-	req.ContentLength = size
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("lightroom %s: %w", op, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		var e struct {
-			Description string `json:"description"`
-		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		return resp.StatusCode, &StatusError{Op: op, StatusCode: resp.StatusCode, Description: e.Description}
-	}
-	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			if ctx.Err() != nil { // timed out (or canceled) while reading
-				return resp.StatusCode, fmt.Errorf("lightroom %s: %w", op, ctx.Err())
-			}
-			// A 2xx with a body we cannot read is the server's fault (or a
-			// cut connection); report it like a bad gateway so it is retried.
-			return resp.StatusCode, &StatusError{Op: op, StatusCode: http.StatusBadGateway,
-				Description: "invalid response body: " + err.Error()}
-		}
-	}
-	_, _ = io.Copy(io.Discard, resp.Body) // let the connection be reused
-	return resp.StatusCode, nil
+	return c.caller.do(ctx, op, method, template, u, contentType, body, size, out)
 }

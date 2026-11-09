@@ -176,3 +176,17 @@ func TestValidSHA(t *testing.T) {
 		}
 	}
 }
+
+// The publisher's words, when it sends some, are what the console shows.
+func TestFailureTextPrefersWords(t *testing.T) {
+	refused := &events.PhotoFailed{SHA256: testSHA, Attempt: 1, ErrorClass: "album_refused",
+		Error: "Lightroom refused collection Talks"}
+	p, _ := Apply(Photo{}, refused, t0)
+	if p.LastError != "Lightroom refused collection Talks" || p.Stage != StageFailed {
+		t.Fatalf("got %q at %q", p.LastError, p.Stage)
+	}
+	p, _ = Apply(p, &events.PhotoFailed{SHA256: testSHA, Attempt: 2, ErrorClass: "timeout", RetryAt: &retryAt}, t0)
+	if p.LastError != "timeout" {
+		t.Fatalf("class fallback: %q", p.LastError)
+	}
+}

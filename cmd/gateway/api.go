@@ -98,7 +98,9 @@ type api struct {
 	bc     *Broadcaster
 	links  traceLinker
 	web    fs.FS
-	demo   *demoProxy // nil unless DEMO_CONTROLS=1
+	demo   *demoProxy     // nil unless DEMO_CONTROLS=1
+	lr     *lightroomAuth // nil: Adobe Lightroom not configured
+	lrMode string         // LIGHTROOM_MODE, for the status when lr is nil
 }
 
 const (
@@ -119,6 +121,7 @@ func (a *api) routes() http.Handler {
 	mux.HandleFunc("GET /api/events", a.bc.ServeSSE)
 	mux.HandleFunc("GET /thumbs/{name}", a.thumb)
 	a.demo.register(mux)
+	a.registerLightroom(mux)
 	mux.Handle("GET /", http.FileServerFS(a.web))
 
 	return otelhttp.NewHandler(mux, "gateway",
@@ -134,9 +137,12 @@ func (a *api) routes() http.Handler {
 	)
 }
 
+// traced also leaves out the OAuth routes: the callback's query carries the
+// authorization code, which must not end up in a span.
 func traced(r *http.Request) bool {
 	p := r.URL.Path
-	return p != "/healthz" && p != "/api/events" && !strings.HasPrefix(p, "/thumbs/")
+	return p != "/healthz" && p != "/api/events" && !strings.HasPrefix(p, "/thumbs/") &&
+		!strings.HasPrefix(p, "/auth/")
 }
 
 func (a *api) healthz(w http.ResponseWriter, r *http.Request) {

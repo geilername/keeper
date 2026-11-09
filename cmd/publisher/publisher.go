@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -16,6 +20,7 @@ import (
 
 	"github.com/geilername/keeper/internal/events"
 	"github.com/geilername/keeper/internal/lightroom"
+	"github.com/geilername/keeper/internal/lrlink"
 	"github.com/geilername/keeper/internal/media"
 	"github.com/geilername/keeper/internal/natsx"
 	"github.com/geilername/keeper/internal/spool"
@@ -31,17 +36,32 @@ const classSpool = "spool_unreadable"
 // the JetStream handle, in tests a recorder.
 type emitFunc func(ctx context.Context, subject, msgID string, v any) error
 
+// albumAdder and targetSource are the Adobe-only parts: where photos go
+// (the collection picked in the console, from the keeper-lightroom bucket)
+// and how they get there. Both are nil in mock mode, which has no albums.
+type albumAdder interface {
+	AddToAlbum(ctx context.Context, albumID string, assetIDs []string) error
+}
+
+type targetSource interface {
+	Target() (lrlink.Target, bool)
+}
+
 type publisher struct {
 	lr         lightroom.Client
+	albums     albumAdder   // nil: no album step (mock)
+	targets    targetSource // nil: no album step (mock)
 	emit       emitFunc
 	maxDeliver int
 	backoff    []time.Duration // same slice natsx uses for nak delays
+	ratedDir   string          // rated raw copies (RATED_DIR); "" uploads raws as shot
 	now        func() time.Time
 
-	tracer   trace.Tracer
-	attempts metric.Int64Counter
-	photos   metric.Int64Counter
-	duration metric.Float64Histogram
+	tracer    trace.Tracer
+	attempts  metric.Int64Counter
+	photos    metric.Int64Counter
+	duration  metric.Float64Histogram
+	albumAdds metric.Int64Counter
 }
 
 func newPublisher(lr lightroom.Client, emit emitFunc, cfg natsx.ConsumerConfig,
@@ -56,23 +76,71 @@ func newPublisher(lr lightroom.Client, emit emitFunc, cfg natsx.ConsumerConfig,
 	duration, err3 := meter.Float64Histogram("keeper.stage.duration",
 		metric.WithDescription("Time per pipeline stage attempt"),
 		metric.WithUnit("s"))
-	if err := errors.Join(err1, err2, err3); err != nil {
+	albumAdds, err4 := meter.Int64Counter("keeper.lightroom.album.adds",
+		metric.WithDescription("Adds to the target Lightroom collection by result (ok, no_target, refused, error)"),
+		metric.WithUnit("{asset}"))
+	if err := errors.Join(err1, err2, err3, err4); err != nil {
 		return nil, err
 	}
 	return &publisher{
 		lr: lr, emit: emit, maxDeliver: cfg.MaxDeliver, backoff: cfg.BackOff, now: time.Now,
-		tracer: tracer, attempts: attempts, photos: photos, duration: duration,
+		ratedDir: ratedDir(),
+		tracer:   tracer, attempts: attempts, photos: photos, duration: duration, albumAdds: albumAdds,
 	}, nil
+}
+
+// ratedDir is RATED_DIR, or keeper-rated in the temp dir. Rated copies are
+// derived and disposable: scratch space, not the spool.
+func ratedDir() string {
+	if d := os.Getenv("RATED_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(os.TempDir(), "keeper-rated")
+}
+
+// withAlbums turns on the album step (Adobe mode).
+func (p *publisher) withAlbums(a albumAdder, t targetSource) *publisher {
+	p.albums, p.targets = a, t
+	return p
 }
 
 // handle is the natsx handler: nil → ack, Permanent → term, else nak with
 // backoff.
 func (p *publisher) handle(ctx context.Context, m natsx.Msg, ev events.PhotoDecided) error {
+	stop := keepAlive(ctx, m, inProgressEvery)
 	permanent, err := p.attempt(ctx, m.Delivered, ev)
+	stop()
 	if permanent {
 		return natsx.Permanent(err)
 	}
 	return err
+}
+
+// inProgressEvery is well inside the 30 s AckWait.
+const inProgressEvery = 10 * time.Second
+
+// keepAlive tells JetStream every interval that m is still being worked on,
+// until stop is called.
+func keepAlive(ctx context.Context, m natsx.Msg, every time.Duration) (stop func()) {
+	if m.Msg == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = m.InProgress()
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // attempt runs one delivery of photo.decided. It returns the error (nil on
@@ -107,6 +175,7 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 			p.record(ctx, span, "retry", "nats", err)
 			return false, fmt.Errorf("publish %s: %w", events.SubjectPublished, err)
 		}
+		p.dropRated(ev.SHA256)
 		p.attempts.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
 		p.photos.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "published")))
 		slog.InfoContext(ctx, "photo published to Lightroom",
@@ -121,7 +190,8 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 		return false, lrErr
 	}
 	last := p.maxDeliver > 0 && delivered >= p.maxDeliver // -1: unlimited
-	failed := events.PhotoFailed{V: events.Version, SHA256: ev.SHA256, Attempt: delivered, ErrorClass: class}
+	failed := events.PhotoFailed{V: events.Version, SHA256: ev.SHA256, Attempt: delivered, ErrorClass: class,
+		Error: failureText(lrErr)}
 	if retryable && !last {
 		at := p.now().Add(p.backoff[min(delivered, len(p.backoff))-1]).UTC()
 		failed.RetryAt = &at
@@ -138,6 +208,7 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 		return false, lrErr
 	}
 	p.record(ctx, span, "failed", class, lrErr)
+	p.dropRated(ev.SHA256) // nothing redelivers this message; the copy is dead weight
 	p.photos.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "failed")))
 	// Permanent error or last delivery: nothing redelivers this message.
 	slog.ErrorContext(ctx, "giving up: photo not published to Lightroom",
@@ -146,51 +217,253 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 	return true, lrErr
 }
 
-// toLightroom runs the three idempotent steps. A redelivery after a crash at
-// any point replays them and ends in the same state.
+// toLightroom runs the idempotent steps. A redelivery after a crash at any
+// point replays them and ends in the same state.
 func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.PhotoDecided) error {
+	// 0. Adobe: know the collection before anything goes into the
+	// catalogue. Until one is picked, the photo waits (retried every 30 s).
+	var target lrlink.Target
+	if p.targets != nil {
+		t, ok := p.targets.Target()
+		if !ok {
+			p.albumAdds.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "no_target")))
+			return errNoTarget
+		}
+		target = t
+	}
+
 	// The original as shot (JPEG or ARW raw); Lightroom gets the raw itself.
 	path, err := spool.FindOriginal(ev.SHA256)
 	if err != nil {
 		return spoolError{err}
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return spoolError{err}
+	mt, ok := media.TypeOf(path)
+	if !ok {
+		mt = media.JPEG
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	// What goes up: the raw with Keeper's rating in its XMP when that can
+	// be done in place, else the original as shot. JPEGs go up unchanged.
+	up, err := p.masterFor(ctx, path, mt, ev)
 	if err != nil {
-		return spoolError{err}
+		return err
 	}
+	defer up.f.Close()
 
-	// 1. Create, or get the existing asset (PUT on a sha-derived ID).
+	// 1. Create, or get the existing asset (PUT on an ID derived from the
+	// original's sha256: the photo's identity). The sha256 Lightroom sees
+	// is that of the bytes uploaded.
 	name := ev.FileName // the camera's name; the spool name is only the sha
 	if name == "" {
-		name = info.Name()
+		name = filepath.Base(path)
 	}
 	asset, _, err := p.lr.CreateAsset(ctx, lightroom.NewAsset{
-		ID: assetID, FileName: name, SHA256: ev.SHA256,
+		ID: assetID, FileName: name, SHA256: up.sha,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 2. Upload the original unless these exact bytes are already there.
+	// 2. Upload the master unless these exact bytes are already there.
 	// The server also answers 200 for the same bytes, so this is only a
 	// shortcut for replays, not what makes the step safe.
-	if asset.MasterSHA256 != ev.SHA256 {
-		mt, ok := media.TypeOf(path)
-		if !ok {
-			mt = media.JPEG
-		}
-		if _, err := p.lr.UploadMaster(ctx, assetID, string(mt), f, info.Size()); err != nil {
+	if asset.MasterSHA256 != up.sha {
+		if _, err := p.lr.UploadMaster(ctx, assetID, string(mt), up.f, up.size); err != nil {
 			return err
 		}
 	}
 
-	// 3. Set the rating (a set, not an increment).
-	return p.lr.SetRating(ctx, assetID, ev.Rating)
+	// 3. Set the rating (a set, not an increment). The Adobe Partner API
+	// cannot write one; the rating then stays in Keeper only.
+	err = p.lr.SetRating(ctx, assetID, ev.Rating)
+	written := err == nil
+	if errors.Is(err, lightroom.ErrRatingUnsupported) {
+		err = nil
+	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("keeper.lightroom.rating_written", written))
+	if err != nil || p.albums == nil {
+		return err
+	}
+
+	// 4. Add the asset to the chosen collection.
+	return p.addToAlbum(ctx, assetID, target)
+}
+
+// master is the file uploaded as the asset's master.
+type master struct {
+	f    *os.File
+	size int64
+	sha  string // hex sha256 of exactly these bytes
+}
+
+// masterFor opens what to upload for the photo at path. For a raw it is a
+// copy with Keeper's rating embedded in the XMP packet
+// (<ratedDir>/<sha>-<rating>.arw): the same rating always gives the same
+// bytes, so a redelivery uploads (or skips) identical bytes. A raw whose
+// packet cannot take the rating goes up as shot, and the span and log say
+// so. A failure to write the copy is retried like an unreadable spool: a
+// raw uploaded without its rating could not get it later.
+func (p *publisher) masterFor(ctx context.Context, path string, mt media.Type, ev events.PhotoDecided) (master, error) {
+	span := trace.SpanFromContext(ctx)
+	if mt == media.ARW && p.ratedDir != "" {
+		rated, err := p.ratedCopy(path, ev)
+		switch {
+		case err == nil:
+			span.SetAttributes(attribute.Bool("keeper.rating.embedded", true),
+				attribute.String("keeper.lightroom.master.sha256", rated.sha))
+			return rated, nil
+		case errors.Is(err, media.ErrCannotEmbed):
+			reason := media.EmbedReason(err)
+			span.SetAttributes(attribute.Bool("keeper.rating.embedded", false),
+				attribute.String("keeper.rating.embed_error", reason))
+			slog.WarnContext(ctx, "rating not embedded in the raw; uploading the original as shot",
+				"sha256", ev.SHA256, "rating", ev.Rating, "reason", reason, "err", err)
+		default:
+			return master{}, spoolError{fmt.Errorf("write rated copy: %w", err)}
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return master{}, spoolError{err}
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return master{}, spoolError{err}
+	}
+	return master{f: f, size: info.Size(), sha: ev.SHA256}, nil
+}
+
+// ratedCopy returns the rated copy of the raw at path, writing it first if
+// it is not there yet (atomically: temp file, then rename).
+func (p *publisher) ratedCopy(path string, ev events.PhotoDecided) (master, error) {
+	final := filepath.Join(p.ratedDir, fmt.Sprintf("%s-%d.arw", ev.SHA256, ev.Rating))
+	if m, err := openHashed(final); err == nil {
+		return m, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return master{}, err
+	}
+
+	src, err := os.Open(path)
+	if err != nil {
+		return master{}, err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return master{}, err
+	}
+	if err := os.MkdirAll(p.ratedDir, 0o755); err != nil {
+		return master{}, err
+	}
+	tmp, err := os.CreateTemp(p.ratedDir, ".rating-*")
+	if err != nil {
+		return master{}, err
+	}
+	defer os.Remove(tmp.Name()) // no-op after the rename
+	err = media.EmbedRating(src, info.Size(), ev.Rating, tmp)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return master{}, err
+	}
+	if err := os.Rename(tmp.Name(), final); err != nil {
+		return master{}, err
+	}
+	return openHashed(final)
+}
+
+// openHashed opens path and hashes it, leaving the file at its start.
+func openHashed(path string) (master, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return master{}, err
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		f.Close()
+		return master{}, err
+	}
+	return master{f: f, size: n, sha: hex.EncodeToString(h.Sum(nil))}, nil
+}
+
+// dropRated removes the photo's rated copies once it is published; they
+// are derived and a redelivery writes them again, byte for byte.
+func (p *publisher) dropRated(sha string) {
+	if p.ratedDir == "" {
+		return
+	}
+	matches, _ := filepath.Glob(filepath.Join(p.ratedDir, sha+"-*.arw"))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// addToAlbum is step 4 in its own span. Already in the collection counts
+// as added (a replay); a 403 for the collection is permanent.
+func (p *publisher) addToAlbum(ctx context.Context, assetID string, target lrlink.Target) error {
+	ctx, span := p.tracer.Start(ctx, "lightroom.add_to_album", trace.WithAttributes(
+		attribute.String("keeper.lightroom.album.id", target.AlbumID),
+		attribute.String("keeper.lightroom.album.name", target.Name),
+		attribute.String("keeper.lightroom.asset_id", assetID),
+	))
+	defer span.End()
+
+	err := p.albums.AddToAlbum(ctx, target.AlbumID, []string{assetID})
+	result := "ok"
+	var refused *lightroom.AlbumRefusedError
+	switch {
+	case errors.As(err, &refused):
+		result = "refused"
+		err = albumRefusedError{name: target.Name, err: refused}
+	case err != nil:
+		result = "error"
+	}
+	span.SetAttributes(attribute.String("keeper.lightroom.album.result", result))
+	p.albumAdds.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+	if err != nil {
+		class, _ := classify(err)
+		span.SetAttributes(attribute.String("error.type", class))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+// errNoTarget: Adobe mode, but nobody picked a collection in the console.
+var errNoTarget = errors.New("no Lightroom collection chosen")
+
+// albumRefusedError names the collection for the console.
+type albumRefusedError struct {
+	name string
+	err  *lightroom.AlbumRefusedError
+}
+
+func (e albumRefusedError) Error() string {
+	return "Lightroom refused collection " + e.name + ": " + e.err.Error()
+}
+func (e albumRefusedError) Unwrap() error { return e.err }
+
+// failureText is the console's words for a failure, when the class alone
+// would not tell the photographer what to do.
+func failureText(err error) string {
+	var refused albumRefusedError
+	switch {
+	case errors.Is(err, errNoTarget):
+		return "No Lightroom collection chosen: pick one in the console"
+	case errors.As(err, &refused):
+		return "Lightroom refused collection " + refused.name
+	case errors.Is(err, lightroom.ErrNotConnected):
+		return "Lightroom not connected: connect it in the console"
+	}
+	if class, _ := lightroom.Classify(err); class == lightroom.ClassAuth {
+		return "Lightroom sign-in expired: connect it again in the console"
+	}
+	return ""
 }
 
 type spoolError struct{ error }
@@ -201,6 +474,9 @@ func classify(err error) (class string, retryable bool) {
 	var se spoolError
 	if errors.As(err, &se) {
 		return classSpool, true
+	}
+	if errors.Is(err, errNoTarget) {
+		return lightroom.ClassNoTarget, true
 	}
 	return lightroom.Classify(err)
 }
