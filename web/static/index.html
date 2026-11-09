@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Keeper</title>
+<link rel="preload" href="fonts/archivo-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="console.css">
+<script type="module" src="console.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-star" viewBox="0 0 12 12"><path d="M6 .8l1.6 3.4 3.7.4-2.8 2.5.8 3.7L6 8.9 2.7 10.8l.8-3.7L.7 4.6l3.7-.4z" fill="currentColor"/></symbol>
+  <symbol id="i-out" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3L7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
+  <symbol id="i-close" viewBox="0 0 16 16"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+</svg>
+
+<header class="top">
+  <h1 class="mark">Keeper</h1>
+  <p class="status" id="status" role="status" aria-live="polite">Connecting…</p>
+</header>
+
+<section class="ramp" aria-label="Pipeline stages">
+  <ol class="stages" id="stages">
+    <li class="stage" data-stage="scoring"><span class="legend">Scoring <span class="zone">VIII</span></span><span class="count">0</span><span class="note"></span><span class="load" aria-hidden="true"></span></li>
+    <li class="stage" data-stage="window"><span class="legend">Burst window <span class="zone">VI</span></span><span class="count">0</span><span class="note"></span><span class="load" aria-hidden="true"></span></li>
+    <li class="stage" data-stage="publishing"><span class="legend">Publishing <span class="zone">III</span></span><span class="count">0</span><span class="note"></span><span class="load" aria-hidden="true"></span></li>
+    <li class="stage" data-stage="lightroom"><span class="legend">In Lightroom <span class="zone">0</span></span><span class="count">0</span><span class="note"></span><span class="load" aria-hidden="true"></span></li>
+  </ol>
+  <p class="key" aria-hidden="true"><span><i class="sw wait"></i>photos waiting, denser = more</span><span><i class="sw conflict"></i>retrying or not published</span></p>
+</section>
+
+<main class="work">
+  <section class="bursts" id="bursts" aria-label="Bursts, newest first">
+    <div class="empty" id="empty" hidden>
+      <h2>Waiting for the first upload</h2>
+      <p>Photos from the camera appear here as they arrive, grouped into bursts and rated once each burst closes.</p>
+    </div>
+  </section>
+
+  <aside class="sheet" id="sheet" aria-label="Photo record" tabindex="-1">
+    <div class="sheet-empty" id="sheet-empty">
+      <p>Select a print to see its record: rating, reasons, readings and its trace.</p>
+    </div>
+    <article class="record" id="record" hidden>
+      <header class="r-head">
+        <div>
+          <h2 class="r-name" id="r-name"></h2>
+          <p class="r-meta" id="r-meta"></p>
+        </div>
+        <button class="close" id="close" type="button" aria-label="Close record"><svg width="16" height="16"><use href="#i-close"/></svg></button>
+      </header>
+      <a class="act" id="r-trace" target="_blank" rel="noopener">
+        <span>Open trace in Dash0</span><span class="cell"><svg width="16" height="16"><use href="#i-out"/></svg></span>
+      </a>
+      <p class="r-trace-id" id="r-trace-id"></p>
+      <figure class="print-large" id="r-print"></figure>
+      <table class="r-table">
+        <tbody id="r-rows"></tbody>
+      </table>
+      <h3 class="legend">Why</h3>
+      <ul class="r-reasons" id="r-reasons"></ul>
+      <h3 class="legend">Journey <span id="r-total"></span></h3>
+      <div class="journey" id="r-journey"></div>
+    </article>
+  </aside>
+</main>
+</body>
+</html>
