@@ -70,6 +70,7 @@ OpenCV). Then:
 | camera-sim | <http://127.0.0.1:8092> (`POST /shoot`, `GET /sets`) |
 | lightroom-mock API and admin | <http://127.0.0.1:8091> (`/admin/faults`, `/admin/stats`, `/admin/reset`) |
 | NATS monitoring | <http://127.0.0.1:8222> (`/jsz`) |
+| Elasticsearch | <http://127.0.0.1:9200> (index `keeper-photos`) |
 
 SFTPGo, NATS client port, Postgres and the collector are reachable only inside
 the compose network.
@@ -100,7 +101,7 @@ from its disk queue; that is expected and does not affect the pipeline.
 
 ```bash
 docker compose down        # keep data
-docker compose down -v     # also delete the spool, NATS, Postgres and collector-queue volumes
+docker compose down -v     # also delete the spool, NATS, Postgres, Elasticsearch and collector-queue volumes
 ```
 
 Ingest remembers every photo by its sha256. Shooting the same set again on a
@@ -142,6 +143,14 @@ The same data as JSON:
 
 ```bash
 curl -s http://127.0.0.1:8090/api/photos | jq -r '.[] | [.file_name, .stage, .bucket, .rating, .trace_id] | @tsv'
+```
+
+Search the reasons and readings (Elasticsearch `query_string` syntax; `bucket`,
+`stage` and `burst` are exact filters):
+
+```bash
+curl -s 'http://127.0.0.1:8090/api/search?q=blur' | jq -r '.photos[] | [.file_name, .bucket, .reasons[0]] | @tsv'
+curl -s -G http://127.0.0.1:8090/api/search --data-urlencode 'q=features.eyes.state:closed AND features.sharpness.score:>0.5'
 ```
 
 ### 3. Open a trace
@@ -257,6 +266,8 @@ flowchart LR
   browser -- "Open trace" --> dash0[(Dash0)]
   ingest --- pg[(Postgres)]
   gateway --- pg
+  indexer["indexer<br/>(every photo.* event)"] --- es[(Elasticsearch)]
+  gateway -- "/api/search" --> es
 ```
 
 Every arrow labelled with a subject goes through JetStream. Every service
@@ -274,10 +285,12 @@ buffers to disk and exports to Dash0 (plus a debug exporter to stdout).
 | `culler` | Go | open burst windows, in memory; their messages stay unacked until decided | `photo.scored` | `burst.decided`, `photo.decided` |
 | `publisher` | Go | nothing beyond JetStream redelivery | `photo.decided` | Lightroom API calls, `photo.published`, `photo.failed` |
 | `lightroom-mock` | Go | in-memory catalogue, fault config | Lightroom-shaped REST (`/v2/…`), admin API | — |
-| `gateway` | Go | Postgres schema `gateway` (read model) | every subject (`photo.>`, `burst.>`) | REST, SSE, the embedded console |
+| `gateway` | Go | Postgres schema `gateway` (read model) | every subject (`photo.>`, `burst.>`) | REST, SSE, the embedded console, `/api/search` |
+| `indexer` | Go | Elasticsearch index `keeper-photos` (derived, rebuilt from the stream) | `photo.>` | — |
 | `otel-collector` | collector-contrib 0.165.0 | Dash0 token, disk-backed send queue | OTLP from every service | OTLP/HTTP to Dash0, debug exporter |
 | `nats` | NATS 2.15.2 | stream `PHOTOS` | — | — |
 | `postgres` | Postgres 18.6 | schemas `ingest`, `gateway` | — | — |
+| `elasticsearch` | Elasticsearch 9.5.3, single node | index `keeper-photos` | — | — |
 | `spool-init` | Alpine | creates the spool directories, owned by uid 1000 | — | runs once |
 
 All Go services are one Go module with one `cmd/<service>` each, built from
@@ -340,12 +353,15 @@ keeper/
 │  ├─ culler/                 burst windows and decisions
 │  ├─ publisher/              Lightroom publishing with retries
 │  ├─ lightroom-mock/         Lightroom-shaped catalogue with fault injection
-│  └─ gateway/                read model, REST, SSE, serves the console
+│  ├─ indexer/                Elasticsearch photo index from the stream
+│  └─ gateway/                read model, REST, SSE, search, serves the console
 ├─ internal/
 │  ├─ events/                 event contracts (JSON, versioned)
 │  ├─ natsx/                  JetStream publish/consume with trace context
 │  ├─ telemetry/              OTel setup, derived photo trace IDs
 │  ├─ policy/                 the culling rules (pure functions)
+│  ├─ photostate/             events → photo state (gateway and indexer)
+│  ├─ search/                 Elasticsearch client and index mapping
 │  ├─ lightroom/              Lightroom client (+ lightroomtest fake)
 │  └─ spool/                  spool paths
 ├─ scorer/                    Python scorer (uv, OpenCV), tests, Dockerfile
@@ -375,6 +391,17 @@ JetStream:
 docker run -d --rm --name keeper-nats-test -p 127.0.0.1:14222:4222 nats:2.15.2-alpine -js
 NATS_URL=nats://127.0.0.1:14222 go test -race ./internal/natsx/ ./cmd/culler/
 docker stop keeper-nats-test
+```
+
+The indexer's integration test also needs Elasticsearch; it recreates the
+`keeper-photos` index and the `indexer` durable, so point it at throwaway
+containers:
+
+```bash
+docker run -d --rm --name keeper-es-test -p 127.0.0.1:19200:9200 -e discovery.type=single-node \
+  -e xpack.security.enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" elasticsearch:9.5.3
+ELASTICSEARCH_URL=http://127.0.0.1:19200 NATS_URL=nats://127.0.0.1:14222 go test -race -run Integration ./cmd/indexer/
+docker stop keeper-es-test
 ```
 
 The scorer's tests run in its Docker build (`test` stage); no local Python is

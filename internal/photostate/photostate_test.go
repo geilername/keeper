@@ -1,7 +1,8 @@
-package main
+package photostate
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func fold(evs ...any) (Photo, []bool) {
 	var first []bool
 	for i, ev := range evs {
 		var fp bool
-		p, fp = apply(p, ev, t0.Add(time.Duration(i+1)*time.Second))
+		p, fp = Apply(p, ev, t0.Add(time.Duration(i+1)*time.Second))
 		first = append(first, fp)
 	}
 	return p, first
@@ -113,7 +114,7 @@ func TestLateEventsStillFillTheirFields(t *testing.T) {
 func TestApplyIsIdempotent(t *testing.T) {
 	for _, ev := range []any{ingested, scored, decided, retry1, gaveUp, published} {
 		once, _ := fold(ingested, ev)
-		twice, _ := apply(once, ev, t0.Add(time.Hour)) // redelivered much later
+		twice, _ := Apply(once, ev, t0.Add(time.Hour)) // redelivered much later
 		if !reflect.DeepEqual(once, twice) {
 			t.Errorf("%T applied twice changed the photo:\n once  %+v\n twice %+v", ev, once, twice)
 		}
@@ -136,7 +137,7 @@ func TestFirstPublishedOnlyOnce(t *testing.T) {
 }
 
 func TestDecodePhotoEvent(t *testing.T) {
-	sha, ev, err := decodePhotoEvent(events.SubjectPublished,
+	sha, ev, err := Decode(events.SubjectPublished,
 		[]byte(`{"v":1,"sha256":"`+testSHA+`","lightroom_asset_id":"x","attempt":1}`))
 	if err != nil || sha != testSHA {
 		t.Fatalf("sha=%q err=%v", sha, err)
@@ -144,13 +145,34 @@ func TestDecodePhotoEvent(t *testing.T) {
 	if _, ok := ev.(*events.PhotoPublished); !ok {
 		t.Fatalf("ev = %T", ev)
 	}
-	if _, _, err := decodePhotoEvent(events.SubjectScored, []byte(`{"sha256":"../etc"}`)); err == nil {
+	if _, _, err := Decode(events.SubjectScored, []byte(`{"sha256":"../etc"}`)); err == nil {
 		t.Error("invalid sha accepted")
 	}
-	if _, _, err := decodePhotoEvent(events.SubjectScored, []byte(`not json`)); err == nil {
+	if _, _, err := Decode(events.SubjectScored, []byte(`not json`)); err == nil {
 		t.Error("invalid json accepted")
 	}
-	if _, ev, err := decodePhotoEvent("photo.unknown", []byte(`{}`)); ev != nil || err != nil {
+	if _, ev, err := Decode("photo.unknown", []byte(`{}`)); ev != nil || err != nil {
 		t.Errorf("unknown subject: ev=%v err=%v", ev, err)
+	}
+}
+
+func TestValidSHA(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{testSHA, true},
+		{strings.Repeat("0", 64), true},
+		{strings.ToUpper(testSHA), false},
+		{testSHA[:63], false},
+		{testSHA + "0", false},
+		{testSHA[:62] + "zz", false},
+		{"", false},
+		{strings.Repeat(".", 64), false},
+	}
+	for _, tt := range tests {
+		if got := ValidSHA(tt.in); got != tt.want {
+			t.Errorf("ValidSHA(%q) = %v, want %v", tt.in, got, tt.want)
+		}
 	}
 }

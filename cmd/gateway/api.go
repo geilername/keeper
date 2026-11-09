@@ -14,30 +14,17 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/geilername/keeper/internal/events"
+	"github.com/geilername/keeper/internal/photostate"
+	"github.com/geilername/keeper/internal/search"
 	"github.com/geilername/keeper/internal/spool"
 )
-
-// validSHA accepts exactly 64 lowercase hex characters. Everything that turns
-// a URL segment into a file path or a query goes through it.
-func validSHA(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
 
 // thumbSHA extracts the sha from a "/thumbs/{name}" segment of the form
 // "<sha>.jpg". Anything else (other extensions, "..", slashes, upper case)
 // is rejected.
 func thumbSHA(name string) (string, bool) {
 	sha, ok := strings.CutSuffix(name, ".jpg")
-	if !ok || !validSHA(sha) {
+	if !ok || !photostate.ValidSHA(sha) {
 		return "", false
 	}
 	return sha, true
@@ -106,11 +93,12 @@ type PhotoDetail struct {
 }
 
 type api struct {
-	store *Store
-	bc    *Broadcaster
-	links traceLinker
-	web   fs.FS
-	demo  *demoProxy // nil unless DEMO_CONTROLS=1
+	store  *Store
+	search *search.Client // nil: ELASTICSEARCH_URL not set, /api/search answers 503
+	bc     *Broadcaster
+	links  traceLinker
+	web    fs.FS
+	demo   *demoProxy // nil unless DEMO_CONTROLS=1
 }
 
 const (
@@ -127,6 +115,7 @@ func (a *api) routes() http.Handler {
 	mux.HandleFunc("GET /api/photos", a.listPhotos)
 	mux.HandleFunc("GET /api/photos/{sha}", a.getPhoto)
 	mux.HandleFunc("GET /api/bursts/{id}", a.getBurst)
+	mux.HandleFunc("GET /api/search", a.searchPhotos)
 	mux.HandleFunc("GET /api/events", a.bc.ServeSSE)
 	mux.HandleFunc("GET /thumbs/{name}", a.thumb)
 	a.demo.register(mux)
@@ -182,7 +171,7 @@ func (a *api) listPhotos(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) getPhoto(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha")
-	if !validSHA(sha) {
+	if !photostate.ValidSHA(sha) {
 		http.Error(w, "sha must be 64 lowercase hex characters", http.StatusBadRequest)
 		return
 	}

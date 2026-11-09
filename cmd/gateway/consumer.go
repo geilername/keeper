@@ -11,6 +11,7 @@ import (
 
 	"github.com/geilername/keeper/internal/events"
 	"github.com/geilername/keeper/internal/natsx"
+	"github.com/geilername/keeper/internal/photostate"
 )
 
 // projector turns stream events into read-model rows and SSE updates.
@@ -58,7 +59,7 @@ func (pr *projector) handle(ctx context.Context, m natsx.Msg, raw json.RawMessag
 		return pr.store.UpsertBurst(ctx, &b, at)
 	}
 
-	sha, ev, err := decodePhotoEvent(subject, raw)
+	sha, ev, err := photostate.Decode(subject, raw)
 	if err != nil {
 		return natsx.Permanent(err)
 	}
@@ -78,39 +79,4 @@ func (pr *projector) handle(ctx context.Context, m natsx.Msg, raw json.RawMessag
 		pr.bc.Publish(pr.links.snapshot(p))
 	}
 	return nil
-}
-
-// decodePhotoEvent decodes a photo.* payload into its contract type. It
-// returns a nil event for subjects the gateway does not know.
-func decodePhotoEvent(subject string, raw []byte) (string, any, error) {
-	var (
-		ev  any
-		sha *string
-	)
-	switch subject {
-	case events.SubjectIngested:
-		e := &events.PhotoIngested{}
-		ev, sha = e, &e.SHA256
-	case events.SubjectScored:
-		e := &events.PhotoScored{}
-		ev, sha = e, &e.SHA256
-	case events.SubjectDecided:
-		e := &events.PhotoDecided{}
-		ev, sha = e, &e.SHA256
-	case events.SubjectPublished:
-		e := &events.PhotoPublished{}
-		ev, sha = e, &e.SHA256
-	case events.SubjectFailed:
-		e := &events.PhotoFailed{}
-		ev, sha = e, &e.SHA256
-	default:
-		return "", nil, nil
-	}
-	if err := json.Unmarshal(raw, ev); err != nil {
-		return "", nil, fmt.Errorf("decode %s: %w", subject, err)
-	}
-	if !validSHA(*sha) {
-		return "", nil, fmt.Errorf("%s: invalid sha256 %q", subject, *sha)
-	}
-	return *sha, ev, nil
 }

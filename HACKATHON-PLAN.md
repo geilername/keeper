@@ -75,6 +75,7 @@ metrics and logs, correlated). Everything else is cut (§2).
  every service ──OTLP──► otel-collector ──OTLP/HTTP (buffered)──► Dash0
  shared volume /spool: photo bytes + thumbnails (ingest writes, scorer/publisher/gateway read)
  Postgres: one instance, one schema per service that keeps state (ingest, gateway)
+ Elasticsearch: photo search index, folded from photo.* by indexer (same fold as gateway)
 ```
 
 ### 3.1 Services
@@ -88,9 +89,10 @@ metrics and logs, correlated). Everything else is cut (§2).
 | `culler` | Go | open burst windows (in memory, durable via unacked msgs) | `photo.scored` | `photo.decided`, `burst.decided` |
 | `publisher` | Go | nothing beyond JetStream redelivery | `photo.decided` | `photo.published`, `photo.failed` |
 | `lightroom-mock` | Go | fake catalogue | Lightroom-shaped REST | admin: `POST /faults` (503 rate, latency) |
-| `gateway` | Go | `gateway.photos` read model | all subjects | REST + SSE + embedded UI |
+| `gateway` | Go | `gateway.photos` read model | all subjects | REST + SSE + embedded UI, `/api/search` (queries Elasticsearch) |
+| `indexer` | Go | `keeper-photos` Elasticsearch index (derived, rebuildable) | `photo.>` | — |
 | `otel-collector` | contrib image | — | OTLP from all | Dash0 |
-| `nats`, `postgres` | images | — | — | — |
+| `nats`, `postgres`, `elasticsearch` | images | — | — | — |
 
 All Go services are **one Go module, one `cmd/` per service**, sharing
 `internal/telemetry`, `internal/events` (contracts) and `internal/natsx`

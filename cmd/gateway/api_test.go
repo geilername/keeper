@@ -12,26 +12,7 @@ import (
 	"time"
 )
 
-func TestValidSHA(t *testing.T) {
-	tests := []struct {
-		in   string
-		want bool
-	}{
-		{testSHA, true},
-		{strings.Repeat("0", 64), true},
-		{strings.ToUpper(testSHA), false},
-		{testSHA[:63], false},
-		{testSHA + "0", false},
-		{testSHA[:62] + "zz", false},
-		{"", false},
-		{strings.Repeat(".", 64), false},
-	}
-	for _, tt := range tests {
-		if got := validSHA(tt.in); got != tt.want {
-			t.Errorf("validSHA(%q) = %v, want %v", tt.in, got, tt.want)
-		}
-	}
-}
+const testSHA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestThumbSHA(t *testing.T) {
 	tests := []struct {
