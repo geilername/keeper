@@ -56,6 +56,7 @@ spec:
       labels: {{- include "keeper.selector" "otel-collector" | nindent 8 }}
       annotations:
         checksum/config: {{ .Files.Get "files/collector.yaml" | sha256sum }}
+        {{- include "keeper.secretsChecksum" . | nindent 8 }}
     spec:
       serviceAccountName: otel-collector
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}

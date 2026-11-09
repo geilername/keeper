@@ -61,7 +61,11 @@ set there (`.env` is parsed, not executed, and never committed):
 |---|---|
 | `DASH0_API_URL` | API endpoint of your region, from Settings → Endpoints → API (e.g. `https://api.eu-west-1.aws.dash0.com`). This is not the OTLP `DASH0_ENDPOINT` (`ingress.…`). |
 | `DASH0_API_TOKEN` | A Dash0 auth token allowed to create dashboards and check rules (Settings → Auth Tokens). Not the collector's ingest token: `DASH0_AUTH_TOKEN` is never used for this. |
-| `DASH0_DATASET` | Target dataset, the same one the collector writes to (`keeper-demo`). |
+| `DASH0_DATASET` | Target dataset, the same one the collector writes to (`keeper-demo`). It must exist in your Dash0 organization (Settings → Datasets); otherwise Dash0 links fail with "Invalid parameters: dataset". |
+
+After applying, the script prints the dashboard's link
+(`https://app.<domain>/goto/dashboards?dashboard_id=<id>&dataset=<dataset>`)
+and the `DASH0_TRACE_URL` line for `.env`.
 
 `dash0 apply` is an upsert. The dashboard carries a fixed
 `dash0.com/id`, and each check rule gets a stable ID derived from the

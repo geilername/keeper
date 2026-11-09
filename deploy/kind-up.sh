@@ -94,10 +94,17 @@ if [[ "${RENEW_TLS:-}" == 1 ]] || ! kubectl --context "$CTX" -n "$NS" get secret
     --dry-run=client -o yaml | kubectl --context "$CTX" apply -f - >/dev/null
 fi
 
+# A hash of both secrets' contents (never the contents themselves): the
+# chart puts it on the pods that read them, so changed credentials or a
+# renewed certificate restart exactly those pods.
+secrets_sum=$( { kubectl --context "$CTX" -n "$NS" get secret keeper-secrets -o jsonpath='{.data}'
+                 kubectl --context "$CTX" -n "$NS" get secret keeper-tls -o jsonpath='{.data}'; } | openssl dgst -sha256 -r | cut -c1-16)
+
 # ── install ────────────────────────────────────────────────
 log "installing chart (namespace $NS, LAN address $LAN_IP)"
 helm upgrade --install keeper deploy/helm/keeper --kube-context "$CTX" -n "$NS" \
-  --set image.tag="$TAG" --set sftpgo.passiveIP="$LAN_IP" "$@" --wait --timeout 6m >/dev/null
+  --set image.tag="$TAG" --set sftpgo.passiveIP="$LAN_IP" --set-string secrets.checksum="$secrets_sum" \
+  "$@" --wait --timeout 6m >/dev/null
 
 kubectl --context "$CTX" -n "$NS" get pods
 cat <<EOF

@@ -15,6 +15,10 @@ set -euo pipefail
 DASH0_CLI_IMAGE=${DASH0_CLI_IMAGE:-ghcr.io/dash0hq/cli:v1.19.0}
 PROMETHEUS_IMAGE=${PROMETHEUS_IMAGE:-prom/prometheus:v3.7.3}
 YQ_IMAGE=${YQ_IMAGE:-mikefarah/yq:4.48.1}
+# The CLI image's CA bundle predates Let's Encrypt's newer chains (Dash0's API
+# is served under the YR2 intermediate), so the CLI gets a current bundle from
+# this image instead.
+CA_IMAGE=${CA_IMAGE:-alpine:3.22}
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
@@ -75,13 +79,18 @@ promtool check rules --lint-fatal /work/dashboard-queries.yaml
 echo "3/3  Dash0 CLI: document validation (dash0 apply --dry-run, offline)"
 offline -v "$assets:/assets:ro" "$DASH0_CLI_IMAGE" apply -f /assets --dry-run --agent-mode=false
 
-trace_url_hint() {
+app_url() {
   local app="https://app.dash0.com"
   if [[ -n "${DASH0_API_URL:-}" ]]; then
     # Same derivation as the Dash0 CLI: app. + the API host's last two labels.
     local host=${DASH0_API_URL#*://}; host=${host%%[:/]*}
     app="https://app.$(awk -F. '{print $(NF-1)"."$NF}' <<<"$host")"
   fi
+  printf '%s' "$app"
+}
+
+trace_url_hint() {
+  local app; app=$(app_url)
   echo "Trace deep link for .env (see observability/README.md):"
   echo "  DASH0_TRACE_URL=$app/goto/traces/explorer?dataset=${DASH0_DATASET:-<dataset>}&trace_id={trace_id}"
 }
@@ -104,7 +113,13 @@ fi
 echo "Applying to dataset \"$DASH0_DATASET\" at $DASH0_API_URL"
 # The token travels as an environment variable, never as an argument, so it
 # does not show up in the process list or shell history.
+docker run --rm "$CA_IMAGE" cat /etc/ssl/certs/ca-certificates.crt > "$work/ca.pem"
 DASH0_AUTH_TOKEN="$DASH0_API_TOKEN" docker run --rm \
   -e DASH0_AUTH_TOKEN -e DASH0_API_URL -e DASH0_DATASET \
+  -v "$work/ca.pem:/etc/keeper/ca.pem:ro" -e SSL_CERT_FILE=/etc/keeper/ca.pem \
   -v "$assets:/assets:ro" "$DASH0_CLI_IMAGE" apply -f /assets --agent-mode=false
+
+# The dashboard's ID is fixed in its file, so its link is too.
+dashboard_id=$(awk '/dash0.com\/id:/ {print $2; exit}' "$assets/dashboards/keeper-pipeline.yaml")
+echo "Dashboard: $(app_url)/goto/dashboards?dashboard_id=$dashboard_id&dataset=$DASH0_DATASET"
 trace_url_hint

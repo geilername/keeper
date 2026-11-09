@@ -22,6 +22,9 @@ spec:
   template:
     metadata:
       labels: {{- include "keeper.selector" $name | nindent 8 }}
+      {{- if has $name (list "ingest" "gateway" "publisher") }}
+      annotations: {{- include "keeper.secretsChecksum" $root | nindent 8 }}
+      {{- end }}
     spec:
       securityContext: {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
       containers:
@@ -54,6 +57,14 @@ spec:
             {{- end }}
             {{- end }}
             {{- if eq $name "gateway" }}
+            # The gateway lists collections and runs the login against the same
+            # Lightroom the publisher uploads to.
+            {{- if $root.Values.lightroomMock.enabled }}
+            - { name: LIGHTROOM_MODE, value: mock }
+            - { name: LIGHTROOM_URL, value: "http://lightroom-mock:8080" }
+            {{- else }}
+            - { name: LIGHTROOM_MODE, value: adobe }
+            {{- end }}
             {{- range $k := list "ADOBE_CLIENT_ID" "ADOBE_CLIENT_SECRET" "KEEPER_TOKEN_KEY" }}
             {{- include "keeper.secretEnv" (dict "root" $root "key" $k) | nindent 12 }}
             {{- end }}

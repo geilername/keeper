@@ -25,6 +25,13 @@ app.kubernetes.io/part-of: keeper
   value: deployment.environment.name={{ .Release.Namespace }}
 {{- end }}
 
+{{/* Pod annotation that rolls a pod when the secrets it reads change. */}}
+{{- define "keeper.secretsChecksum" -}}
+{{- with .Values.secrets.checksum }}
+checksum/secrets: {{ . | quote }}
+{{- end }}
+{{- end }}
+
 {{/* Optional key from keeper-secrets. */}}
 {{- define "keeper.secretEnv" -}}
 - name: {{ .key }}

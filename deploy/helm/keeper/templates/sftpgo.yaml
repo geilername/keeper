@@ -29,6 +29,7 @@ spec:
       labels: {{- include "keeper.selector" "sftpgo" | nindent 8 }}
       annotations:
         checksum/config: {{ printf "%s%s" (.Files.Get "files/sftpgo-entrypoint.sh") (.Files.Get "files/sftpgo-initial-data.json") | sha256sum }}
+        {{- include "keeper.secretsChecksum" . | nindent 8 }}
     spec:
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
