@@ -28,6 +28,9 @@ type config struct {
 	natsURL     string
 	databaseURL string
 	httpAddr    string
+	httpsAddr   string // optional TLS listener (the Adobe OAuth callback must be https)
+	tlsCert     string
+	tlsKey      string
 	traceURL    string // Dash0 trace deep link template with {trace_id}
 	demoAdmin   string // lightroom-mock admin base URL; empty = demo controls off
 	esURL       string // Elasticsearch for /api/search; empty disables it
@@ -39,6 +42,9 @@ func loadConfig() config {
 		natsURL:     env("NATS_URL", "nats://nats:4222"),
 		databaseURL: env("DATABASE_URL", "postgres://keeper:keeper@postgres:5432/keeper"),
 		httpAddr:    env("HTTP_ADDR", ":8080"),
+		httpsAddr:   os.Getenv("HTTPS_ADDR"),
+		tlsCert:     os.Getenv("TLS_CERT_FILE"),
+		tlsKey:      os.Getenv("TLS_KEY_FILE"),
 		traceURL:    os.Getenv("DASH0_TRACE_URL"),
 		demoAdmin:   demoAdminURL(),
 		esURL:       os.Getenv("ELASTICSEARCH_URL"),
@@ -140,6 +146,17 @@ func run(ctx context.Context, cfg config) error {
 	}
 	srv.RegisterOnShutdown(bc.Close)
 
+	// Optional second listener with TLS, same handler. Serving TLS needs
+	// both files; a half-configured TLS listener is a startup error.
+	var tlsSrv *http.Server
+	if cfg.httpsAddr != "" {
+		if cfg.tlsCert == "" || cfg.tlsKey == "" {
+			return errors.New("HTTPS_ADDR needs TLS_CERT_FILE and TLS_KEY_FILE")
+		}
+		tlsSrv = &http.Server{Addr: cfg.httpsAddr, Handler: srv.Handler, ReadHeaderTimeout: 5 * time.Second}
+		tlsSrv.RegisterOnShutdown(bc.Close)
+	}
+
 	// Either half failing stops the other one.
 	ctx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
@@ -150,7 +167,7 @@ func run(ctx context.Context, cfg config) error {
 		go a.lr.maintain(ctx, time.Minute)
 	}
 
-	httpDone := make(chan error, 1)
+	httpDone := make(chan error, 2)
 	go func() {
 		slog.InfoContext(ctx, "gateway listening", "addr", cfg.httpAddr)
 		err := srv.ListenAndServe()
@@ -159,6 +176,16 @@ func run(ctx context.Context, cfg config) error {
 		}
 		httpDone <- err
 	}()
+	if tlsSrv != nil {
+		go func() {
+			slog.InfoContext(ctx, "gateway listening with TLS", "addr", cfg.httpsAddr)
+			err := tlsSrv.ListenAndServeTLS(cfg.tlsCert, cfg.tlsKey)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			httpDone <- err
+		}()
+	}
 
 	var httpErr, consumerErr error
 	consumerFinished := false
@@ -175,6 +202,9 @@ func run(ctx context.Context, cfg config) error {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(sctx) // closes SSE streams via RegisterOnShutdown
+	if tlsSrv != nil {
+		_ = tlsSrv.Shutdown(sctx)
+	}
 
 	if !consumerFinished {
 		consumerErr = <-consumerDone // drains in-flight messages, then returns

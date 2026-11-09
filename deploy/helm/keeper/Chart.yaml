@@ -1,0 +1,7 @@
+apiVersion: v2
+name: keeper
+description: Keeper keeps the best frame of every burst - camera over FTPES to Lightroom, observable end to end.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/geilername/keeper

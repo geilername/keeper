@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,16 +27,26 @@ CREATE TABLE IF NOT EXISTS ingest.photos (
 	duplicates    int         NOT NULL DEFAULT 0
 );`
 
+// openStore connects and creates the schema, retrying until ctx ends:
+// Postgres may still be starting (Kubernetes has no depends_on).
 func openStore(ctx context.Context, url string) (*store, error) {
 	db, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(ctx, schema); err != nil {
-		db.Close()
-		return nil, err
+	for {
+		_, err := db.Exec(ctx, schema)
+		if err == nil {
+			return &store{db: db}, nil
+		}
+		slog.WarnContext(ctx, "waiting for postgres", "err", err)
+		select {
+		case <-ctx.Done():
+			db.Close()
+			return nil, fmt.Errorf("create schema: %w", err)
+		case <-time.After(2 * time.Second):
+		}
 	}
-	return &store{db: db}, nil
 }
 
 type photoRow struct {

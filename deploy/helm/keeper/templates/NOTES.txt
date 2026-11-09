@@ -1,0 +1,11 @@
+Keeper is installed in namespace {{ .Release.Namespace }}.
+
+Console:  http://{{ .Values.sftpgo.passiveIP }}:8090
+          https://localhost:8443   (Adobe OAuth callback; self-signed certificate)
+Camera:   FTPES (explicit TLS) at {{ .Values.sftpgo.passiveIP }}:2121, user "camera",
+          passive ports {{ .Values.sftpgo.passivePorts.start }}-{{ .Values.sftpgo.passivePorts.end }}.
+          Set the camera to ignore the certificate (it is self-signed).
+{{- if .Values.lightroomMock.enabled }}
+
+Lightroom: the TEST mock is enabled; photos do not reach Adobe.
+{{- end }}

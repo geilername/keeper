@@ -1,0 +1,38 @@
+{{- if .Values.lightroomMock.enabled }}
+# Test only: a Lightroom-shaped fake with fault injection, for running the
+# cluster without Adobe credentials.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lightroom-mock
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "keeper.selector" "lightroom-mock" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" "lightroom-mock" | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: lightroom-mock
+          image: {{ include "keeper.image" (dict "root" . "name" "lightroom-mock") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env: {{- include "keeper.otelEnv" . | nindent 12 }}
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lightroom-mock
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "keeper.selector" "lightroom-mock" | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+{{- end }}
