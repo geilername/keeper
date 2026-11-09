@@ -71,6 +71,7 @@ func Setup(ctx context.Context, service string) (Shutdown, error) {
 	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
+		sdktrace.WithIDGenerator(newIDGenerator()),
 		sdktrace.WithBatcher(traceExp, sdktrace.WithBatchTimeout(time.Second)),
 	)
 	shutdowns = append(shutdowns, tp.Shutdown)

@@ -10,6 +10,13 @@ x-go-service: &go-service
       condition: service_started
 
 services:
+  spool-init: # named volumes start root-owned; every service runs as uid 1000
+    image: alpine:3.22
+    command: ["sh", "-c", "mkdir -p /spool/incoming /spool/photos /spool/thumbs && chown -R 1000:1000 /spool"]
+    volumes:
+      - spool:/spool
+    restart: "no"
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.165.0
     command: ["--config=/etc/otelcol/collector.yaml"]
@@ -54,6 +61,15 @@ services:
       args: { SERVICE: ingest }
     environment:
       <<: *otel-env
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: postgres://keeper:keeper@postgres:5432/keeper
+    volumes:
+      - spool:/spool # the only writer of photos/ and thumbs/
+    depends_on:
+      spool-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      nats: { condition: service_started }
+      otel-collector: { condition: service_started }
 
   scorer:
     build: ./scorer
@@ -64,6 +80,8 @@ services:
     volumes:
       - spool:/spool:ro
     depends_on:
+      spool-init:
+        condition: service_completed_successfully
       nats:
         condition: service_started
       otel-collector:
@@ -83,6 +101,94 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  sftpgo:
+    image: drakkan/sftpgo:v2.7.6
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/keeper/entrypoint.sh"]
+    env_file: ./sftpgo/sftpgo.env
+    environment:
+      CAMERA_FTP_PASSWORD: ${CAMERA_FTP_PASSWORD:-camera}
+    sysctls: # FTP on port 21 as uid 1000 (Docker allows this by default, Podman does not)
+      net.ipv4.ip_unprivileged_port_start: 21
+    volumes:
+      - ./sftpgo/entrypoint.sh:/etc/keeper/entrypoint.sh:ro
+      - ./sftpgo/initial-data.json:/etc/keeper/initial-data.json:ro
+      - spool:/spool
+    healthcheck:
+      test: ["CMD", "sftpgo", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on:
+      spool-init: { condition: service_completed_successfully }
+      ingest: { condition: service_started }
+
+  camera-sim:
+    <<: *go-service
+    build:
+      context: .
+      args: { SERVICE: camera-sim }
+    environment:
+      <<: *otel-env
+      FTP_PASSWORD: ${CAMERA_FTP_PASSWORD:-camera}
+    volumes:
+      - ./demo/sets:/demo/sets:ro
+    ports:
+      - "127.0.0.1:8092:8080" # POST /shoot?set=…[&dup=1], GET /sets
+    healthcheck:
+      test: ["CMD", "/app", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    depends_on: # YAML merge is shallow, so otel-collector is repeated
+      otel-collector: { condition: service_started }
+      sftpgo: { condition: service_healthy }
+
+  culler:
+    <<: *go-service
+    build:
+      context: .
+      args: { SERVICE: culler }
+    environment:
+      <<: *otel-env
+      NATS_URL: nats://nats:4222
+      # defaults: BURST_GAP=2s DHASH_MAX=12 BURST_IDLE=20s BURST_MAX_WAIT=90s
+
+  publisher:
+    <<: *go-service
+    build:
+      context: .
+      args: { SERVICE: publisher }
+    environment:
+      <<: *otel-env
+      NATS_URL: nats://nats:4222
+      LIGHTROOM_URL: http://lightroom-mock:8080
+    volumes:
+      - spool:/spool:ro
+    depends_on:
+      nats: { condition: service_started }
+      lightroom-mock: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+
+  gateway:
+    <<: *go-service
+    build:
+      context: .
+      args: { SERVICE: gateway }
+    environment:
+      <<: *otel-env
+      NATS_URL: nats://nats:4222
+      DATABASE_URL: postgres://keeper:keeper@postgres:5432/keeper
+      DASH0_TRACE_URL: ${DASH0_TRACE_URL:-} # template with {trace_id}
+    volumes:
+      - spool:/spool:ro
+    depends_on:
+      otel-collector: { condition: service_started }
+      nats: { condition: service_started }
+      postgres: { condition: service_healthy }
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-8090}:8080" # console
 
 volumes:
   spool: # photo bytes + thumbnails; every service runs as uid 1000

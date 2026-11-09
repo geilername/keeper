@@ -1,0 +1,36 @@
+{
+  "set": "road-dog",
+  "source": "road.jpg",
+  "frames": [
+    {
+      "file": "road-dog-01.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:05:00.000+01:00"
+    },
+    {
+      "file": "road-dog-02.jpg",
+      "kind": "over",
+      "captured_at": "2026-11-09T10:05:00.300+01:00"
+    },
+    {
+      "file": "road-dog-03.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:05:00.600+01:00"
+    },
+    {
+      "file": "road-dog-04.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:05:00.900+01:00"
+    },
+    {
+      "file": "road-dog-05.jpg",
+      "kind": "blur",
+      "captured_at": "2026-11-09T10:05:01.200+01:00"
+    },
+    {
+      "file": "road-dog-06.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:05:01.500+01:00"
+    }
+  ]
+}

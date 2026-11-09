@@ -1,0 +1,36 @@
+{
+  "set": "island-dog",
+  "source": "island.jpg",
+  "frames": [
+    {
+      "file": "island-dog-01.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:10:00.000+01:00"
+    },
+    {
+      "file": "island-dog-02.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:10:00.300+01:00"
+    },
+    {
+      "file": "island-dog-03.jpg",
+      "kind": "under",
+      "captured_at": "2026-11-09T10:10:00.600+01:00"
+    },
+    {
+      "file": "island-dog-04.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:10:00.900+01:00"
+    },
+    {
+      "file": "island-dog-05.jpg",
+      "kind": "sharp",
+      "captured_at": "2026-11-09T10:10:01.200+01:00"
+    },
+    {
+      "file": "island-dog-06.jpg",
+      "kind": "blur",
+      "captured_at": "2026-11-09T10:10:01.500+01:00"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 // Command ingest receives SFTPGo upload hooks, content-addresses each photo
-// and publishes photo.ingested. M0: only telemetry wiring and a health check.
+// and publishes photo.ingested (one trace per photo starts here).
 package main
 
 import (
@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
 
+	"github.com/geilername/keeper/internal/natsx"
+	"github.com/geilername/keeper/internal/spool"
 	"github.com/geilername/keeper/internal/telemetry"
 )
 
@@ -35,22 +36,29 @@ func main() {
 		_ = shutdown(ctx)
 	}()
 
-	// M0 smoke signal: one span, one correlated log line, one metric.
-	{
-		ctx, span := otel.Tracer(service).Start(ctx, "ingest startup")
-		slog.InfoContext(ctx, "ingest starting", "addr", addr())
-		up, _ := otel.Meter(service).Int64Counter("keeper.service.starts")
-		up.Add(ctx, 1)
-		span.End()
+	st, err := openStore(ctx, env("DATABASE_URL", "postgres://keeper:keeper@postgres:5432/keeper"))
+	if err != nil {
+		slog.Error("postgres unavailable", "err", err)
+		os.Exit(1)
 	}
+	defer st.db.Close()
+	nc, js, err := natsx.Connect(ctx, env("NATS_URL", "nats://nats:4222"), service)
+	if err != nil {
+		slog.Error("nats unavailable", "err", err)
+		os.Exit(1)
+	}
+	defer nc.Close()
 
+	in := newIngester(st, js)
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /hooks/sftpgo", in.hook)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	slog.InfoContext(ctx, "ingest listening", "addr", env("HTTP_ADDR", ":8080"), "incoming", spool.Incoming())
 
 	srv := &http.Server{
-		Addr: addr(),
+		Addr: env("HTTP_ADDR", ":8080"),
 		Handler: otelhttp.NewHandler(mux, service,
 			otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != "/healthz" })),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -66,9 +74,9 @@ func main() {
 	}
 }
 
-func addr() string {
-	if a := os.Getenv("HTTP_ADDR"); a != "" {
-		return a
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return ":8080"
+	return def
 }

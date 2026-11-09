@@ -1,0 +1,58 @@
+{
+  "version": 17,
+  "users": [
+    {
+      "username": "camera",
+      "status": 1,
+      "password": "__CAMERA_FTP_PASSWORD__",
+      "home_dir": "/spool/incoming",
+      "permissions": {
+        "/": ["list", "upload", "overwrite", "create_dirs"]
+      },
+      "filters": {
+        "denied_protocols": ["SSH", "HTTP", "DAV"]
+      },
+      "description": "Camera (or camera-sim) uploading bursts over FTP"
+    }
+  ],
+  "event_actions": [
+    {
+      "name": "ingest-hook",
+      "description": "Tell ingest about a finished upload",
+      "type": 1,
+      "options": {
+        "http_config": {
+          "endpoint": "http://ingest:8080/hooks/sftpgo",
+          "method": "POST",
+          "timeout": 20,
+          "headers": [
+            { "key": "Content-Type", "value": "application/json" }
+          ],
+          "body": "{\"event\":\"{{.Event}}\",\"fs_path\":\"{{.FsPath}}\",\"virtual_path\":\"{{.VirtualPath}}\",\"file_size\":{{.FileSize}},\"user\":\"{{.Name}}\",\"timestamp\":\"{{.Timestamp}}\"}"
+        }
+      }
+    }
+  ],
+  "event_rules": [
+    {
+      "name": "upload-to-ingest",
+      "description": "Every successful camera upload goes to ingest before the FTP transfer is acknowledged",
+      "status": 1,
+      "trigger": 1,
+      "conditions": {
+        "fs_events": ["upload"],
+        "options": {
+          "names": [{ "pattern": "camera" }],
+          "event_statuses": [1]
+        }
+      },
+      "actions": [
+        {
+          "name": "ingest-hook",
+          "order": 1,
+          "relation_options": { "execute_sync": true }
+        }
+      ]
+    }
+  ]
+}
