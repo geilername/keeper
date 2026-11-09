@@ -242,20 +242,19 @@ volume; events carry the sha256 and a path.
 
 ```mermaid
 flowchart LR
-  cam["camera-sim<br/>(or a camera)"] -- FTP --> sftp[SFTPGo]
-  sftp -- "upload hook<br/>HTTP" --> ingest
-  ingest -- photo.ingested --> scorer["scorer<br/>(Python)"]
-  scorer -- photo.scored --> culler
-  culler -- "photo.decided" --> publisher
-  culler -. burst.decided .-> gateway
-  publisher -- "HTTP" --> lr[lightroom-mock]
-  publisher -- "photo.published<br/>photo.failed" --> gateway
-  ingest -. photo.ingested .-> gateway
-  scorer -. photo.scored .-> gateway
-  culler -. photo.decided .-> gateway
-  gateway -- "REST + SSE" --> browser[console]
-  browser -- "Open trace" --> dash0[(Dash0)]
-  ingest --- pg[(Postgres)]
+  cam["camera-sim<br/>(or a camera)"] -->|"FTP"| sftp["SFTPGo"]
+  sftp -->|"upload hook (HTTP)"| ingest["ingest"]
+  ingest -->|"photo.ingested"| scorer["scorer<br/>(Python)"]
+  scorer -->|"photo.scored"| culler["culler"]
+  culler -->|"photo.decided"| publisher["publisher"]
+  publisher -->|"HTTP"| lr["lightroom-mock"]
+  publisher -->|"photo.published<br/>photo.failed"| gateway["gateway"]
+  ingest -.->|"photo.ingested"| gateway
+  scorer -.->|"photo.scored"| gateway
+  culler -.->|"photo.decided<br/>burst.decided"| gateway
+  gateway -->|"REST + SSE"| browser["console"]
+  browser -->|"Open trace"| dash0[("Dash0")]
+  ingest --- pg[("Postgres")]
   gateway --- pg
 ```
 
@@ -407,10 +406,9 @@ Hackathon rule 5 asks for disclosure.
 - **Console design:** the [impeccable](https://github.com/pbakaus/impeccable)
   design skill, which produced `PRODUCT.md`, `DESIGN.md` and the records in
   `.impeccable/`.
-- **Review:** the author reviewed changes before committing them.
-
-> **TODO (author): replace this line with your own description of how you
-> reviewed the AI-generated changes.**
+- **Review:** the author reviewed changes before committing them. In the
+  author's words: changes were reviewed by reading AI summaries and
+  finetuning.
 
 ## Data and licences
 
