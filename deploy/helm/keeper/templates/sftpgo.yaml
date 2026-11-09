@@ -1,0 +1,110 @@
+{{- if not .Values.sftpgo.passiveIP }}
+{{- fail "sftpgo.passiveIP is required: the LAN address the camera reaches for FTP data (e.g. the Mac's IP)" }}
+{{- end }}
+# SFTPGo: the camera's FTPES endpoint. Explicit TLS is required; every finished
+# upload calls ingest synchronously before the transfer is acknowledged.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sftpgo
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+data:
+  entrypoint.sh: |
+    {{- .Files.Get "files/sftpgo-entrypoint.sh" | nindent 4 }}
+  initial-data.json: |
+    {{- .Files.Get "files/sftpgo-initial-data.json" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sftpgo
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "keeper.selector" "sftpgo" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" "sftpgo" | nindent 8 }}
+      annotations:
+        checksum/config: {{ printf "%s%s" (.Files.Get "files/sftpgo-entrypoint.sh") (.Files.Get "files/sftpgo-initial-data.json") | sha256sum }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # SFTPGo's camera user writes to /spool/incoming.
+        - name: incoming
+          image: {{ .Values.sftpgo.image }}
+          command: ["/bin/sh", "-c", "mkdir -p /spool/incoming"]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - { name: spool, mountPath: /spool }
+      containers:
+        - name: sftpgo
+          image: {{ .Values.sftpgo.image }}
+          command: ["/bin/sh", "/etc/keeper/entrypoint.sh"]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - name: CAMERA_FTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.name }}, key: CAMERA_FTP_PASSWORD } }
+            # FTPES: explicit TLS required on control and data connections.
+            - { name: SFTPGO_FTPD__BINDINGS__0__PORT, value: {{ .Values.sftpgo.controlPort | quote }} }
+            - { name: SFTPGO_FTPD__BINDINGS__0__TLS_MODE, value: "1" }
+            - { name: SFTPGO_FTPD__BINDINGS__0__FORCE_PASSIVE_IP, value: {{ .Values.sftpgo.passiveIP | quote }} }
+            - { name: SFTPGO_FTPD__CERTIFICATE_FILE, value: /etc/keeper/tls/tls.crt }
+            - { name: SFTPGO_FTPD__CERTIFICATE_KEY_FILE, value: /etc/keeper/tls/tls.key }
+            - { name: SFTPGO_FTPD__PASSIVE_PORT_RANGE__START, value: {{ .Values.sftpgo.passivePorts.start | quote }} }
+            - { name: SFTPGO_FTPD__PASSIVE_PORT_RANGE__END, value: {{ .Values.sftpgo.passivePorts.end | quote }} }
+            - { name: SFTPGO_SFTPD__BINDINGS__0__PORT, value: "0" }
+            - { name: SFTPGO_HTTPD__BINDINGS__0__PORT, value: "0" }
+            - { name: SFTPGO_TELEMETRY__BIND_PORT, value: "10000" }
+            - { name: SFTPGO_TELEMETRY__BIND_ADDRESS, value: "0.0.0.0" }
+            - { name: SFTPGO_COMMON__UMASK, value: "022" }
+            - { name: SFTPGO_COMMON__SETSTAT_MODE, value: "1" }
+            - { name: SFTPGO_DATA_PROVIDER__DRIVER, value: memory }
+            - { name: SFTPGO_DATA_PROVIDER__NAME, value: /tmp/keeper-initial-data.json }
+            - { name: SFTPGO_LOG_LEVEL, value: info }
+          ports:
+            - { name: ftp, containerPort: {{ .Values.sftpgo.controlPort }} }
+            {{- range $p := untilStep (int .Values.sftpgo.passivePorts.start) (int (add1 .Values.sftpgo.passivePorts.end)) 1 }}
+            - { name: pasv-{{ $p }}, containerPort: {{ $p }} }
+            {{- end }}
+            - { name: telemetry, containerPort: 10000 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: telemetry }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.sftpgo.resources | nindent 12 }}
+          volumeMounts:
+            - { name: spool, mountPath: /spool }
+            - { name: config, mountPath: /etc/keeper/entrypoint.sh, subPath: entrypoint.sh, readOnly: true }
+            - { name: config, mountPath: /etc/keeper/initial-data.json, subPath: initial-data.json, readOnly: true }
+            - { name: tls, mountPath: /etc/keeper/tls, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: spool
+          persistentVolumeClaim: { claimName: spool }
+        - name: config
+          configMap: { name: sftpgo }
+        - name: tls
+          secret: { secretName: {{ .Values.secrets.tlsName }} }
+        - name: tmp
+          emptyDir: {}
+---
+# FTPES from the LAN: the control port and every passive port as NodePorts.
+# Passive ports keep the same number on host, node and pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sftpgo
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  # Keep the camera's address: SFTPGo checks that data connections come from
+  # the same client as the control connection.
+  externalTrafficPolicy: Local
+  selector: {{- include "keeper.selector" "sftpgo" | nindent 4 }}
+  ports:
+    - { name: ftp, port: {{ .Values.sftpgo.controlPort }}, targetPort: ftp, nodePort: {{ .Values.sftpgo.controlNodePort }} }
+    {{- range $p := untilStep (int .Values.sftpgo.passivePorts.start) (int (add1 .Values.sftpgo.passivePorts.end)) 1 }}
+    - { name: pasv-{{ $p }}, port: {{ $p }}, targetPort: {{ $p }}, nodePort: {{ $p }} }
+    {{- end }}

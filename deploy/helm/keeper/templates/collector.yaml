@@ -1,0 +1,98 @@
+# One OpenTelemetry collector in the middle (ADR-5): it alone holds the Dash0 token.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+data:
+  collector.yaml: |
+    {{- .Files.Get "files/collector.yaml" | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+---
+# k8sattributes reads pod and owner metadata.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-keeper-otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces, nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets, deployments, statefulsets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-keeper-otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-keeper-otel-collector
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "keeper.selector" "otel-collector" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" "otel-collector" | nindent 8 }}
+      annotations:
+        checksum/config: {{ .Files.Get "files/collector.yaml" | sha256sum }}
+    spec:
+      serviceAccountName: otel-collector
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: otel-collector
+          image: {{ .Values.collector.image }}
+          args: ["--config=/etc/otelcol/collector.yaml"]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - { name: COLLECTOR_DEBUG_VERBOSITY, value: {{ .Values.collector.debugVerbosity | quote }} }
+            {{- range $k := list "DASH0_ENDPOINT" "DASH0_AUTH_TOKEN" "DASH0_DATASET" }}
+            - name: {{ $k }}
+              valueFrom: { secretKeyRef: { name: {{ $.Values.secrets.name }}, key: {{ $k }} } }
+            {{- end }}
+          ports:
+            - { name: otlp-grpc, containerPort: 4317 }
+            - { name: otlp-http, containerPort: 4318 }
+            - { name: health, containerPort: 13133 }
+          readinessProbe:
+            httpGet: { path: /, port: health }
+          resources: {{- toYaml .Values.collector.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol, readOnly: true }
+            - { name: queue, mountPath: /var/lib/otelcol/queue }
+      volumes:
+        - name: config
+          configMap: { name: otel-collector }
+        - name: queue
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "keeper.selector" "otel-collector" | nindent 4 }}
+  ports:
+    - { name: otlp-grpc, port: 4317, targetPort: otlp-grpc }
+    - { name: otlp-http, port: 4318, targetPort: otlp-http }

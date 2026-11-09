@@ -1,0 +1,16 @@
+# The shared photo spool. See values.yaml (spool) for the access-mode note.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spool
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep # photos survive an uninstall
+spec:
+  accessModes: [{{ .Values.spool.accessMode }}]
+  {{- with .Values.spool.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.spool.size }}

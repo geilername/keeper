@@ -1,0 +1,46 @@
+# NATS with JetStream: the event backbone (ADR-1). File storage on a PVC.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels: {{- include "keeper.selector" "nats" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" "nats" | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image }}
+          args: ["-js", "-sd", "/data", "-m", "8222"]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - { name: client, containerPort: 4222 }
+            - { name: monitor, containerPort: 8222 }
+          readinessProbe:
+            httpGet: { path: "/healthz?js-enabled-only=true", port: monitor }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.nats.storage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "keeper.selector" "nats" | nindent 4 }}
+  ports:
+    - { name: client, port: 4222, targetPort: client }
+    - { name: monitor, port: 8222, targetPort: monitor }

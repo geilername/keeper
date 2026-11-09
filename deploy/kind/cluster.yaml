@@ -1,0 +1,26 @@
+# kind cluster for Keeper, reachable from the LAN through the Mac's IP.
+#   kind create cluster --name kind --config deploy/kind/cluster.yaml
+# Port mappings can only be set at creation. Each host port maps to a
+# NodePort of the same chart; FTP passive ports must keep the same number end
+# to end, because SFTPGo advertises them to the camera.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Console: http and https (the https one serves the Adobe OAuth callback)
+      - { containerPort: 30090, hostPort: 8090, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30443, hostPort: 8443, listenAddress: "0.0.0.0", protocol: TCP }
+      # FTPES control port for the camera
+      - { containerPort: 32121, hostPort: 2121, listenAddress: "0.0.0.0", protocol: TCP }
+      # FTPES passive data ports (same number on host, node, service and pod)
+      - { containerPort: 30100, hostPort: 30100, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30101, hostPort: 30101, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30102, hostPort: 30102, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30103, hostPort: 30103, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30104, hostPort: 30104, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30105, hostPort: 30105, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30106, hostPort: 30106, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30107, hostPort: 30107, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30108, hostPort: 30108, listenAddress: "0.0.0.0", protocol: TCP }
+      - { containerPort: 30109, hostPort: 30109, listenAddress: "0.0.0.0", protocol: TCP }

@@ -1,0 +1,14 @@
+# The console (gateway), reachable from the LAN through kind's port mappings.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector: {{- include "keeper.selector" "gateway" | nindent 4 }}
+  ports:
+    - { name: http, port: 8080, targetPort: http, nodePort: {{ .Values.console.nodePort }} }
+    {{- if .Values.console.https.enabled }}
+    - { name: https, port: 8443, targetPort: https, nodePort: {{ .Values.console.https.nodePort }} }
+    {{- end }}

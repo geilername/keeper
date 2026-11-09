@@ -1,0 +1,52 @@
+{{- if .Values.search.enabled }}
+# Elasticsearch, single node: the search index derived from the stream.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  serviceName: elasticsearch
+  replicas: 1
+  selector:
+    matchLabels: {{- include "keeper.selector" "elasticsearch" | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" "elasticsearch" | nindent 8 }}
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: elasticsearch
+          image: {{ .Values.search.image }}
+          env:
+            - { name: discovery.type, value: single-node }
+            - { name: xpack.security.enabled, value: "false" }
+            - { name: ES_JAVA_OPTS, value: "-Xms{{ .Values.search.heap }} -Xmx{{ .Values.search.heap }}" }
+          ports:
+            - { name: http, containerPort: 9200 }
+          readinessProbe:
+            httpGet: { path: "/_cluster/health?local=true", port: http }
+            periodSeconds: 10
+          resources: {{- toYaml .Values.search.resources | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /usr/share/elasticsearch/data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.search.storage }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  labels: {{- include "keeper.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "keeper.selector" "elasticsearch" | nindent 4 }}
+  ports:
+    - { name: http, port: 9200, targetPort: http }
+{{- end }}

@@ -1,0 +1,133 @@
+{{- /*
+One Deployment (and a Service when the app has a port) per Keeper service.
+App-specific settings live in values.yaml under apps.<name>.
+*/ -}}
+{{- $root := . }}
+{{- range $name, $app := .Values.apps }}
+{{- if or (not $app.requires) (and (eq $app.requires "search") $root.Values.search.enabled) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "keeper.labels" $root | nindent 4 }}
+    {{- include "keeper.selector" $name | nindent 4 }}
+spec:
+  replicas: 1
+  # One pod at a time: the spool is ReadWriteOnce and consumers are durable.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "keeper.selector" $name | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "keeper.selector" $name | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "keeper.image" (dict "root" $root "name" ($app.imageName | default $name)) }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext: {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          env:
+            {{- include "keeper.otelEnv" $root | nindent 12 }}
+            - name: NATS_URL
+              value: nats://nats:4222
+            {{- if has $name (list "ingest" "gateway") }}
+            {{- include "keeper.dbEnv" $root | nindent 12 }}
+            {{- end }}
+            {{- if and $root.Values.search.enabled (has $name (list "gateway" "indexer")) }}
+            - name: ELASTICSEARCH_URL
+              value: http://elasticsearch:9200
+            {{- end }}
+            {{- if eq $name "publisher" }}
+            {{- if $root.Values.lightroomMock.enabled }}
+            - { name: LIGHTROOM_MODE, value: mock }
+            - { name: LIGHTROOM_URL, value: "http://lightroom-mock:8080" }
+            {{- else }}
+            - { name: LIGHTROOM_MODE, value: adobe }
+            {{- include "keeper.secretEnv" (dict "root" $root "key" "ADOBE_CLIENT_ID") | nindent 12 }}
+            {{- include "keeper.secretEnv" (dict "root" $root "key" "KEEPER_TOKEN_KEY") | nindent 12 }}
+            {{- end }}
+            {{- end }}
+            {{- if eq $name "gateway" }}
+            {{- range $k := list "ADOBE_CLIENT_ID" "ADOBE_CLIENT_SECRET" "KEEPER_TOKEN_KEY" }}
+            {{- include "keeper.secretEnv" (dict "root" $root "key" $k) | nindent 12 }}
+            {{- end }}
+            - { name: ADOBE_REDIRECT_URI, value: {{ $root.Values.lightroom.redirectURI | quote }} }
+            - name: DASH0_TRACE_URL
+              valueFrom: { secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: DASH0_TRACE_URL, optional: true } }
+            {{- if $root.Values.console.https.enabled }}
+            - name: HTTPS_ADDR
+              value: ":8443"
+            - name: TLS_CERT_FILE
+              value: /etc/keeper/tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /etc/keeper/tls/tls.key
+            {{- end }}
+            {{- if $root.Values.lightroomMock.enabled }}
+            - name: DEMO_CONTROLS
+              value: "1"
+            - name: LIGHTROOM_ADMIN_URL
+              value: http://lightroom-mock:8080
+            {{- end }}
+            {{- end }}
+            {{- range $k, $v := $app.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if $app.port }}
+          ports:
+            - { name: http, containerPort: {{ $app.port }} }
+            {{- if and (eq $name "gateway") $root.Values.console.https.enabled }}
+            - { name: https, containerPort: 8443 }
+            {{- end }}
+          # Services wait for Postgres and NATS before serving: give them up to
+          # 5 minutes to start before liveness can restart them.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            failureThreshold: 6
+          {{- end }}
+          resources: {{- toYaml $app.resources | nindent 12 }}
+          volumeMounts:
+            {{- if $app.spool }}
+            - name: spool
+              mountPath: /spool
+              readOnly: {{ eq $app.spool "ro" }}
+            {{- end }}
+            {{- if and (eq $name "gateway") $root.Values.console.https.enabled }}
+            - name: tls
+              mountPath: /etc/keeper/tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if $app.spool }}
+        - name: spool
+          persistentVolumeClaim: { claimName: spool }
+        {{- end }}
+        {{- if and (eq $name "gateway") $root.Values.console.https.enabled }}
+        - name: tls
+          secret: { secretName: {{ $root.Values.secrets.tlsName }} }
+        {{- end }}
+{{- if and $app.port (ne $name "gateway") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "keeper.labels" $root | nindent 4 }}
+spec:
+  selector: {{- include "keeper.selector" $name | nindent 4 }}
+  ports:
+    - { name: http, port: {{ $app.port }}, targetPort: http }
+{{- end }}
+{{- end }}
+{{- end }}
