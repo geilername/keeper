@@ -5,3 +5,12 @@ demo/photos/
 __pycache__/
 .venv/
 .DS_Store
+
+# Photos never go into git: local test shoots, raws, sidecars.
+test-pics/
+*.[aA][rR][wW]
+*.[xX][mM][pP]
+*.[dD][nN][gG]
+*.[nN][eE][fF]
+*.[cC][rR]3
+*.[hH][eE][iI][cC]
