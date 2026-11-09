@@ -108,11 +108,26 @@ sub-seconds) and dHash. Settings, all optional environment variables of the
 | `BURST_IDLE` | 20 s | a burst is decided after this long without a new frame |
 | `BURST_MAX_WAIT` | 90 s | a burst is decided at the latest this long after it opened |
 
-The rules are in [`internal/policy`](../internal/policy/policy.go): the best
-frame is the sharpest frame that passes every check (eyes not closed, sharp in
-absolute terms and relative to the burst's sharpest frame, well exposed);
-other passing frames are keepers; failing frames are rejects, each with its
-reasons in words. If no frame passes, every frame is a reject.
+The rules are in [`internal/policy`](../internal/policy/policy.go). There is
+one scoring profile, **conference**, and it judges every frame against the
+other frames of its own burst:
+
+- **Unusable** frames are rejects whatever the burst: too blurred to use
+  (sharpness < 0.25), nearly black, or blown out.
+- Among the usable frames, a frame is a **reject** when it is clearly worse
+  than its siblings: blurred next to the sharpest frame (< 60 %), more than one
+  stop off the burst's middle exposure (for an even count, the nearer of the
+  two middle values, so two exposure groups after a light change are both
+  fine), or eyes closed where another frame has them open.
+- Every burst with a usable frame keeps exactly one **best** frame, even when
+  the whole burst shares a problem: darkness shared by the whole burst is the
+  venue, and downcast eyes shared by the whole burst are a moment, not a blink.
+  The best frame is ranked by open eyes (when the burst has a blink), then a
+  visible face, then sharpness, then exposure nearest the burst's middle.
+- The other usable frames are **keepers**.
+
+Each decision carries its reasons in words, and the `burst.decide` span
+records `keeper.policy.profile`.
 
 ## Traces
 

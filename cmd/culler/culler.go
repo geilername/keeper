@@ -167,6 +167,7 @@ func (c *culler) decide(ctx context.Context, win *window, closeReason string, no
 			attribute.Int("keeper.burst.size", len(members)),
 			attribute.String("keeper.burst.best", res.Best),
 			attribute.String("keeper.burst.close_reason", closeReason),
+			attribute.String("keeper.policy.profile", policy.Profile),
 		))
 	defer bspan.End()
 
