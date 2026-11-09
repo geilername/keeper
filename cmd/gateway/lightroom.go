@@ -93,6 +93,7 @@ type authStore interface {
 type linkStore interface {
 	PutToken(ctx context.Context, t lrlink.Token) error
 	PutTarget(ctx context.Context, t lrlink.Target) error
+	DeleteTarget(ctx context.Context) error
 	Target(ctx context.Context) (lrlink.Target, bool, error)
 }
 
@@ -126,6 +127,9 @@ type lightroomAuth struct {
 
 	mu  sync.Mutex // serialises loads and refreshes
 	cur *grant     // nil: not loaded or not connected
+	// published: the current access token is in the bucket. False after a
+	// failed hand-over; every tick retries until it lands.
+	published bool
 }
 
 // Refresh this long before the access token expires (IMS hands out 24 h
@@ -174,7 +178,8 @@ func (a *lightroomAuth) load(ctx context.Context) (*grant, error) {
 }
 
 // save seals g into Postgres, then hands the access token to the publisher.
-// Caller holds a.mu.
+// Once Postgres has it the grant is saved: a failed hand-over is logged and
+// retried by the next tick, not reported as a failed save. Caller holds a.mu.
 func (a *lightroomAuth) save(ctx context.Context, g *grant) error {
 	plain, err := json.Marshal(g.sealedGrant)
 	if err != nil {
@@ -187,11 +192,17 @@ func (a *lightroomAuth) save(ctx context.Context, g *grant) error {
 		return err
 	}
 	a.cur = g
-	return a.publish(ctx, g)
+	if err := a.publish(ctx, g); err != nil {
+		slog.WarnContext(ctx, "could not hand the lightroom token to the publisher; retrying every minute", "err", err)
+	}
+	return nil
 }
 
+// publish puts g's access token into the bucket. Caller holds a.mu.
 func (a *lightroomAuth) publish(ctx context.Context, g *grant) error {
-	return a.link.PutToken(ctx, lrlink.Token{AccessToken: g.AccessToken, ExpiresAt: g.expiresAt, AccountID: g.accountID})
+	err := a.link.PutToken(ctx, lrlink.Token{AccessToken: g.AccessToken, ExpiresAt: g.expiresAt, AccountID: g.accountID})
+	a.published = err == nil
+	return err
 }
 
 // AccessToken makes lightroomAuth the gateway's TokenSource: the stored
@@ -269,7 +280,7 @@ func (a *lightroomAuth) tick(ctx context.Context, republish bool) {
 		}
 		return
 	}
-	if republish {
+	if republish || !a.published {
 		if err := a.publish(ctx, g); err != nil {
 			slog.WarnContext(ctx, "could not hand the lightroom token to the publisher", "err", err)
 		}
@@ -366,6 +377,18 @@ func (a *lightroomAuth) connect(ctx context.Context, code string) error {
 	if err := a.save(ctx, g); err != nil {
 		return err
 	}
+	// A collection picked under another Adobe account does not exist in
+	// this one: drop it, so photos wait for a new choice (no_target)
+	// instead of failing against a foreign album ID.
+	if t, ok, err := a.link.Target(ctx); err != nil {
+		slog.WarnContext(ctx, "reading lightroom target", "err", err)
+	} else if ok && t.AccountID != g.accountID {
+		if err := a.link.DeleteTarget(ctx); err != nil {
+			slog.WarnContext(ctx, "could not drop the previous account's lightroom target", "err", err)
+		} else {
+			slog.InfoContext(ctx, "lightroom target dropped: it belongs to another account", "album_id", t.AlbumID)
+		}
+	}
 	slog.InfoContext(ctx, "lightroom connected", "account", g.accountName, "expires_at", g.expiresAt,
 		"refresh_token", g.RefreshToken != "", "entitlement", acc.Entitlement.Status)
 	return nil
@@ -404,7 +427,9 @@ func (a *lightroomAuth) status(ctx context.Context) lrStatus {
 	if err != nil {
 		slog.WarnContext(ctx, "lightroom grant unreadable", "err", err)
 	}
+	account := ""
 	if g != nil {
+		account = g.accountID
 		s.Account = g.accountName
 		exp := g.expiresAt.UTC()
 		s.ExpiresAt = &exp
@@ -415,10 +440,20 @@ func (a *lightroomAuth) status(ctx context.Context) lrStatus {
 	}
 	if t, ok, err := a.link.Target(ctx); err != nil {
 		slog.WarnContext(ctx, "reading lightroom target", "err", err)
-	} else if ok {
-		s.Target = &t
+	} else if ok && t.AccountID == account {
+		s.Target = &t // a target of another account is no target
 	}
 	return s
+}
+
+// accountID is the connected account, or "".
+func (a *lightroomAuth) accountID(ctx context.Context) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if g, _ := a.load(ctx); g != nil {
+		return g.accountID
+	}
+	return ""
 }
 
 func (a *api) lrCollections(w http.ResponseWriter, r *http.Request) {
@@ -472,7 +507,8 @@ func (a *api) lrSetTarget(w http.ResponseWriter, r *http.Request) {
 		if c.ID != req.AlbumID {
 			continue
 		}
-		t := lrlink.Target{AlbumID: c.ID, Name: c.Name, Path: c.Path, SetAt: a.lr.now().UTC()}
+		t := lrlink.Target{AlbumID: c.ID, Name: c.Name, Path: c.Path, AccountID: a.lr.accountID(r.Context()),
+			SetAt: a.lr.now().UTC()}
 		if err := a.lr.link.PutTarget(r.Context(), t); err != nil {
 			a.fail(w, r, err)
 			return

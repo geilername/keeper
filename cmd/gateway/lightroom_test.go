@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -41,17 +42,35 @@ func (m *memAuth) SaveLightroomAuth(_ context.Context, r authRow) error {
 }
 
 type memLink struct {
-	mu     sync.Mutex
-	tokens []lrlink.Token
-	target *lrlink.Target
+	mu       sync.Mutex
+	tokens   []lrlink.Token
+	target   *lrlink.Target
+	failPuts int // the next n PutToken calls fail (a NATS blip)
 }
+
+var errBlip = errors.New("nats: timeout")
 
 func (m *memLink) PutToken(_ context.Context, t lrlink.Token) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failPuts > 0 {
+		m.failPuts--
+		return errBlip
+	}
 	m.tokens = append(m.tokens, t)
 	return nil
 }
+
+func (m *memLink) failNext(n int) { m.mu.Lock(); m.failPuts = n; m.mu.Unlock() }
+
+func (m *memLink) DeleteTarget(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.target = nil
+	return nil
+}
+
+func (m *memLink) count() int { m.mu.Lock(); defer m.mu.Unlock(); return len(m.tokens) }
 
 func (m *memLink) PutTarget(_ context.Context, t lrlink.Target) error {
 	m.mu.Lock()
@@ -124,7 +143,9 @@ func noRedirect(jar http.CookieJar) *http.Client {
 }
 
 // connect runs login → (Adobe) → callback with the browser's cookie jar.
-func (e *lrEnv) connect(t *testing.T) {
+func (e *lrEnv) connect(t *testing.T) { t.Helper(); e.connectWith(t, "good-code") }
+
+func (e *lrEnv) connectWith(t *testing.T, code string) {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
 	c := noRedirect(jar)
@@ -141,7 +162,7 @@ func (e *lrEnv) connect(t *testing.T) {
 	if !strings.HasPrefix(loc.String(), e.ims.URL+"/ims/authorize/v2?") || len(state) < 40 {
 		t.Fatalf("login redirect %s", loc)
 	}
-	res, err = c.Get(e.srv.URL + "/auth/lightroom/callback?code=good-code&state=" + url.QueryEscape(state))
+	res, err = c.Get(e.srv.URL + "/auth/lightroom/callback?code=" + code + "&state=" + url.QueryEscape(state))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,12 +289,12 @@ func TestLightroomRefreshBeforeExpiry(t *testing.T) {
 func TestLightroomMaintainRepublishesAtStart(t *testing.T) {
 	e := newLREnv(t)
 	e.connect(t)
-	n := len(e.link.tokens)
+	n := e.link.count()
 	e.lr.cur = nil // restart
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	e.lr.maintain(ctx, time.Hour) // runs the start tick, then sees ctx done
-	if len(e.link.tokens) != n+1 {
+	if e.link.count() != n+1 {
 		t.Fatalf("tokens published %d, want %d", len(e.link.tokens), n+1)
 	}
 }
@@ -326,5 +347,66 @@ func TestOAuthRoutesAreNotTraced(t *testing.T) {
 	}
 	if !traced(httptest.NewRequest(http.MethodGet, "/api/lightroom/status", nil)) {
 		t.Fatal("status should be traced")
+	}
+}
+
+// A token the bucket did not take (NATS blip) is handed over again on the
+// next tick, not only after the next refresh a day later.
+func TestLightroomTokenHandOverIsRetried(t *testing.T) {
+	e := newLREnv(t)
+	ctx := context.Background()
+
+	// Connect while NATS is away: the grant is stored and the sign-in
+	// counts as done; the token follows on the next tick.
+	e.link.failNext(1)
+	e.connect(t)
+	if e.link.count() != 0 {
+		t.Fatal("token reached the bucket through a failing put")
+	}
+	e.lr.tick(ctx, false)
+	if tok := e.link.last(); tok.AccessToken != "access-1" {
+		t.Fatalf("after retry: %+v", tok)
+	}
+
+	// The same for a refresh.
+	e.advance(24*time.Hour - 5*time.Minute)
+	e.link.failNext(1)
+	e.lr.tick(ctx, false) // refreshes, hand-over fails
+	if e.ims.Refreshes() != 1 || e.link.last().AccessToken != "access-1" {
+		t.Fatalf("refreshes %d, bucket %+v", e.ims.Refreshes(), e.link.last())
+	}
+	e.lr.tick(ctx, false) // not due for refresh, but the hand-over is retried
+	if tok := e.link.last(); tok.AccessToken != "access-2" {
+		t.Fatalf("refreshed token never reached the publisher: %+v", tok)
+	}
+	n := e.link.count()
+	e.lr.tick(ctx, false)
+	if e.link.count() != n {
+		t.Fatal("ticks keep re-publishing a token that already landed")
+	}
+}
+
+// A collection picked under one Adobe account means nothing in another.
+func TestLightroomAccountSwitchDropsTarget(t *testing.T) {
+	e := newLREnv(t)
+	e.adobe.AddAlbum(lightroomtest.Album{ID: "col1", Name: "Talks", Subtype: "collection"})
+	e.connect(t)
+	if code, body := do(t, http.MethodPut, e.srv.URL+"/api/lightroom/target", "application/json", `{"album_id":"col1"}`); code != 200 {
+		t.Fatalf("put target: %d %s", code, body)
+	}
+	if s := e.status(t); s.Target == nil || s.Target.AccountID != e.adobe.AccountID {
+		t.Fatalf("target %+v, want it tagged with the account", s.Target)
+	}
+
+	// Someone else signs in.
+	e.adobe.SetAccountID("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	e.adobe.SetToken("access-2")
+	e.ims.SetCode("second-code")
+	e.connectWith(t, "second-code")
+	if s := e.status(t); s.State != lrConnected || s.Target != nil {
+		t.Fatalf("after switch: %+v, want connected without a target", s)
+	}
+	if _, ok, _ := e.link.Target(context.Background()); ok {
+		t.Fatal("old account's target still in the bucket")
 	}
 }

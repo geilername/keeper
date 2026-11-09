@@ -208,6 +208,7 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 		return false, lrErr
 	}
 	p.record(ctx, span, "failed", class, lrErr)
+	p.dropRated(ev.SHA256) // nothing redelivers this message; the copy is dead weight
 	p.photos.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "failed")))
 	// Permanent error or last delivery: nothing redelivers this message.
 	slog.ErrorContext(ctx, "giving up: photo not published to Lightroom",

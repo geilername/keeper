@@ -180,7 +180,12 @@ func (s *Adobe) base(r *http.Request) string {
 	return s.URL + "/v2/catalogs/" + r.PathValue("cid") + "/"
 }
 
+// SetAccountID changes who is signed in.
+func (s *Adobe) SetAccountID(id string) { s.mu.Lock(); s.AccountID = id; s.mu.Unlock() }
+
 func (s *Adobe) account(*http.Request) reply {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return reply{http.StatusOK, map[string]any{
 		"id": s.AccountID, "type": "account", "full_name": "Ada Lovelace", "email": "ada@example.com",
 		"entitlement": map[string]any{"status": "subscriber"},
@@ -383,6 +388,9 @@ func NewIMS(clientID, secret, code string) *IMS {
 	s.Server = httptest.NewServer(mux)
 	return s
 }
+
+// SetCode sets the next valid authorization code.
+func (s *IMS) SetCode(c string) { s.mu.Lock(); s.Code = c; s.mu.Unlock() }
 
 // Revoke makes the current refresh token invalid.
 func (s *IMS) Revoke() { s.mu.Lock(); s.revoked = true; s.mu.Unlock() }

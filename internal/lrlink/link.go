@@ -36,12 +36,14 @@ const (
 // tokenAAD binds a sealed KV token to this bucket and key.
 var tokenAAD = []byte("keeper/" + Bucket + "/" + KeyToken + "/v1")
 
-// Target is the collection photos are added to.
+// Target is the collection photos are added to. AccountID is the Adobe
+// account it belongs to: a collection ID means nothing in another catalogue.
 type Target struct {
-	AlbumID string    `json:"album_id"`
-	Name    string    `json:"name"`
-	Path    string    `json:"path"`
-	SetAt   time.Time `json:"set_at"`
+	AlbumID   string    `json:"album_id"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	AccountID string    `json:"account_id,omitempty"`
+	SetAt     time.Time `json:"set_at"`
 }
 
 // Token is an access token as the publisher sees it.
@@ -92,6 +94,15 @@ func (w Writer) PutToken(ctx context.Context, t Token) error {
 // DeleteToken removes the token (disconnect, or the grant was revoked).
 func (w Writer) DeleteToken(ctx context.Context) error {
 	err := w.KV.Delete(ctx, KeyToken)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil
+	}
+	return err
+}
+
+// DeleteTarget removes the chosen collection (the account changed).
+func (w Writer) DeleteTarget(ctx context.Context) error {
+	err := w.KV.Delete(ctx, KeyTarget)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil
 	}
@@ -219,11 +230,16 @@ func (l *Link) Watch(ctx context.Context, kv jetstream.KeyValue) error {
 	}
 }
 
-// Target returns the chosen collection, if any.
+// Target returns the chosen collection, if any. A target picked under a
+// different Adobe account than the current token's is no target: its album
+// ID does not exist in this catalogue.
 func (l *Link) Target() (Target, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.target == nil {
+		return Target{}, false
+	}
+	if l.target.AccountID != "" && l.token != nil && l.token.AccountID != l.target.AccountID {
 		return Target{}, false
 	}
 	return *l.target, true

@@ -196,3 +196,33 @@ func TestRatedCopyUnwritableRetries(t *testing.T) {
 		t.Fatal("asset created before the master was ready")
 	}
 }
+
+// A photo that gives up leaves no rated copy behind: nothing will
+// redeliver it, and a refusing collection would otherwise fill the disk.
+func TestRatedCopyDroppedWhenGivingUp(t *testing.T) {
+	h := newAdobeHarness(t)
+	h.targets.set(lrlink.Target{AlbumID: "col1", Name: "Talks"})
+	h.adobe.Refuse("col1")
+	raw, _ := sonyRaw(t, "refused")
+	ev := rawPhoto(t, raw, 5)
+	if permanent, err := h.p.attempt(context.Background(), 1, ev); err == nil || !permanent {
+		t.Fatalf("permanent=%v err=%v", permanent, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.p.ratedDir, "*")); len(left) != 0 {
+		t.Fatalf("rated copies left after giving up: %v", left)
+	}
+}
+
+// A retry keeps the copy: the next delivery needs the same bytes.
+func TestRatedCopyKeptForRetry(t *testing.T) {
+	h := newHarness(t)
+	raw, _ := sonyRaw(t, "retry")
+	ev := rawPhoto(t, raw, 5)
+	h.lr.Fail(http.StatusServiceUnavailable)
+	if permanent, err := h.p.attempt(context.Background(), 1, ev); err == nil || permanent {
+		t.Fatalf("permanent=%v err=%v", permanent, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(h.p.ratedDir, ev.SHA256+"-5.arw")); len(left) != 1 {
+		t.Fatalf("rated copy gone before the retry: %v", left)
+	}
+}

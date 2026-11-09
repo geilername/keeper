@@ -123,6 +123,17 @@ func TestLinkApply(t *testing.T) {
 		t.Fatalf("after foreign token: %v", err)
 	}
 
+	// A target picked under another account is not handed out.
+	_ = l.Apply(KeyToken, sealedToken(t, s, Token{AccessToken: "b1", ExpiresAt: now.Add(time.Hour), AccountID: "u2"}), false)
+	_ = l.Apply(KeyTarget, []byte(`{"album_id":"col7","account_id":"u1"}`), false)
+	if _, ok := l.Target(); ok {
+		t.Fatal("target of account u1 handed out while u2 is connected")
+	}
+	_ = l.Apply(KeyTarget, []byte(`{"album_id":"col8","account_id":"u2"}`), false)
+	if tg, ok := l.Target(); !ok || tg.AlbumID != "col8" {
+		t.Fatalf("own account's target: %+v %v", tg, ok)
+	}
+
 	if err := l.Apply(KeyTarget, nil, true); err != nil {
 		t.Fatal(err)
 	}
