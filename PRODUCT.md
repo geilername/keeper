@@ -58,6 +58,10 @@ behaviour is observable, not asserted.
   embedded JPEG preview and sends the raw itself to Lightroom under the
   camera's file name. Real ARW test files from the author's camera are
   still to come; until then ARW is verified with synthetic TIFF fixtures.
+- One scoring profile: **conferences**. Dim halls, stage and screen light,
+  people talking, looking at phones, turning away. Frames are judged against
+  their own burst, every burst keeps its best usable frame, and darkness or
+  downcast eyes shared by the whole burst are the scene, not a fault.
 - Served by the `gateway` service: static HTML, CSS and vanilla JS modules in
   `web/static/`, embedded with `go:embed`. No build step, no framework.
 - Data: `GET /api/photos`, `GET /api/photos/{sha}` (with burst siblings and

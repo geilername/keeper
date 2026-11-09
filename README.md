@@ -134,8 +134,10 @@ The console updates live over SSE. Each photo moves through the stages
 ingested → scored → decided → published. The duplicate does not appear as a
 seventh photo: ingest recognises the sha256 and records `ingest duplicate` in
 the existing photo's trace. After the burst closes, one frame is rated best
-(5★), the frames that pass every check are keepers (3★), and blurred or badly
-exposed frames are rejects (1★). Click a photo for its record sheet: rating,
+(5★), frames as good as the rest of the burst are keepers (3★), and frames
+clearly worse than their siblings (blurred next to them, a stop off their
+exposure, eyes closed where another frame has them open) are rejects (1★).
+The scoring profile is tuned for conference photography. Click a photo for its record sheet: rating,
 reasons in words, scorer readings and its journey.
 
 The same data as JSON:
