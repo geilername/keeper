@@ -5,15 +5,17 @@ diagram and the trace model summary are in the [README](../README.md#architectur
 
 ## Request path of one photo
 
-1. `camera-sim` uploads a JPEG over FTP to `sftpgo` (user `camera`, home
-   `/spool/incoming`).
+1. `camera-sim` uploads a JPEG or Sony ARW over FTP to `sftpgo` (user
+   `camera`, home `/spool/incoming`).
 2. On a successful upload, SFTPGo calls `POST http://ingest:8080/hooks/sftpgo`
    synchronously, before it answers the FTP client. A non-2xx answer makes
    SFTPGo delete the file and fail the transfer; camera-sim retries each frame
    up to 3 times. Contract: [sftpgo/README.md](../sftpgo/README.md).
 3. `ingest` hashes the file (sha256), hard-links it to
-   `/spool/photos/<sha256>.jpg`, inserts a row into `ingest.photos`, writes
-   the thumbnail and publishes `photo.ingested`. A known sha256 is answered as
+   `/spool/photos/<sha256>.<ext>` (`.jpg` or `.arw`), inserts a row into
+   `ingest.photos`, writes an upright JPEG preview to
+   `/spool/previews/<sha256>.jpg` (for an ARW, from its embedded preview) and
+   the thumbnail, and publishes `photo.ingested`. A known sha256 is answered as
    `duplicate` (or `resumed`, when an earlier attempt stopped before
    publishing) and is not published again.
 4. `scorer` reads the photo from the spool and publishes `photo.scored`.
@@ -66,7 +68,7 @@ scorer mirrors `photo.scored` in Python. JSON, every event carries
 `"v": 1`. Messages carry references (sha256, spool path), never photo bytes.
 
 ```
-photo.ingested  { v, sha256, file_name, path, size_bytes, captured_at, camera_model? }
+photo.ingested  { v, sha256, file_name, path, original_path, media_type, size_bytes, captured_at, camera_model? }
 photo.scored    { v, sha256, captured_at, features, timings_ms }
 burst.decided   { v, burst_id, members[sha256], best, reason, close_reason }
 photo.decided   { v, sha256, burst_id, bucket, rating, reasons[] }
@@ -187,6 +189,7 @@ cardinality: no sha256, path or file name.
 | gateway | `GET /api/search?q=&bucket=&stage=&burst=&limit=n` | photo search in Elasticsearch: `{total, photos}`; `q` in `query_string` syntax (`blur`, `"eyes closed"`, `features.sharpness.score:>0.5`, `attempts:>2`) |
 | gateway | `GET /api/events` | SSE, `event: photo` per change |
 | gateway | `GET /thumbs/{sha}.jpg` | thumbnail |
+| gateway | `GET/POST /api/demo/faults`, `GET /api/demo/stats` | console fault panel, forwarded to lightroom-mock's `/admin/faults` and `/admin/stats`; only with `DEMO_CONTROLS=1` |
 | camera-sim | `POST /shoot?set=<name>[&dup=1]`, `GET /sets` | demo driver |
 | lightroom-mock | `GET/POST /admin/faults` | fault config: `error_rate` (0..1), `status` (default 503), `latency_ms`; a POST replaces the whole config |
 | lightroom-mock | `GET /admin/stats` | assets, masters, ratings, create replays, injected faults |
