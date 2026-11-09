@@ -32,18 +32,23 @@ var StreamSubjects = []string{"photo.>", "burst.>"}
 func MsgID(subject, id string) string { return subject + ":" + id }
 
 type PhotoIngested struct {
-	V           int       `json:"v"`
-	SHA256      string    `json:"sha256"`
-	FileName    string    `json:"file_name"`
-	Path        string    `json:"path"`
-	SizeBytes   int64     `json:"size_bytes"`
-	CapturedAt  time.Time `json:"captured_at"`
-	CameraModel string    `json:"camera_model,omitempty"`
+	V        int    `json:"v"`
+	SHA256   string `json:"sha256"` // of the original as shot
+	FileName string `json:"file_name"`
+	// Path is the upright JPEG to analyse: the file itself for a JPEG, the
+	// embedded preview for a raw. OriginalPath is the file as shot.
+	Path         string    `json:"path"`
+	OriginalPath string    `json:"original_path"`
+	MediaType    string    `json:"media_type"` // image/jpeg | image/x-sony-arw
+	SizeBytes    int64     `json:"size_bytes"` // of the original
+	CapturedAt   time.Time `json:"captured_at"`
+	CameraModel  string    `json:"camera_model,omitempty"`
 }
 
 type PhotoScored struct {
 	V          int                `json:"v"`
 	SHA256     string             `json:"sha256"`
+	FileName   string             `json:"file_name,omitempty"` // passed through for Lightroom
 	CapturedAt time.Time          `json:"captured_at"`
 	Features   Features           `json:"features"`
 	TimingsMS  map[string]float64 `json:"timings_ms"`
@@ -98,12 +103,13 @@ type BurstDecided struct {
 }
 
 type PhotoDecided struct {
-	V       int      `json:"v"`
-	SHA256  string   `json:"sha256"`
-	BurstID string   `json:"burst_id"`
-	Bucket  string   `json:"bucket"`
-	Rating  int      `json:"rating"`
-	Reasons []string `json:"reasons"` // human-readable, shown on the photo sheet
+	V        int      `json:"v"`
+	SHA256   string   `json:"sha256"`
+	FileName string   `json:"file_name,omitempty"` // the camera's name, used in Lightroom
+	BurstID  string   `json:"burst_id"`
+	Bucket   string   `json:"bucket"`
+	Rating   int      `json:"rating"`
+	Reasons  []string `json:"reasons"` // human-readable, shown on the photo sheet
 }
 
 type PhotoPublished struct {

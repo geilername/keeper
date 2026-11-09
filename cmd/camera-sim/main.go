@@ -2,7 +2,7 @@
 // over FTP into SFTPGo, frame by frame, like a camera uploading a burst
 // (HACKATHON-PLAN.md §2, §4).
 //
-//	POST /shoot?set=<name>[&dup=1]  upload demo/sets/<name>/*.jpg in filename order;
+//	POST /shoot?set=<name>[&dup=1]  upload demo/sets/<name>/*.{jpg,arw} in filename order;
 //	                                dup=1 re-sends the first frame under a new name
 //	GET  /sets                      list sets and their frame counts
 //	GET  /healthz                   204

@@ -76,9 +76,10 @@ func newCuller(cfg windowConfig, ackWait time.Duration, publish publishFunc) (*c
 // directly: the photo is held (ErrHold) until its window is decided.
 func (c *culler) handle(ctx context.Context, m natsx.Msg, p events.PhotoScored) error {
 	mem := &member{
-		frame:  policy.Frame{SHA256: p.SHA256, CapturedAt: p.CapturedAt, Features: p.Features},
-		msg:    m.Msg,
-		parent: trace.SpanContextFromContext(ctx),
+		frame:    policy.Frame{SHA256: p.SHA256, CapturedAt: p.CapturedAt, Features: p.Features},
+		fileName: p.FileName,
+		msg:      m.Msg,
+		parent:   trace.SpanContextFromContext(ctx),
 	}
 
 	c.mu.Lock()
@@ -216,7 +217,7 @@ func (c *culler) publishDecision(ctx context.Context, m *member, d policy.Decisi
 	defer span.End()
 
 	err := c.publish(ctx, events.SubjectDecided, events.MsgID(events.SubjectDecided, m.frame.SHA256), events.PhotoDecided{
-		V: events.Version, SHA256: m.frame.SHA256, BurstID: burstID,
+		V: events.Version, SHA256: m.frame.SHA256, FileName: m.fileName, BurstID: burstID,
 		Bucket: d.Bucket, Rating: d.Rating, Reasons: d.Reasons,
 	})
 	if err != nil {

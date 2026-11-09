@@ -78,6 +78,7 @@ def scored_event(ingested: dict, feats: dict, timings_ms: dict) -> dict:
     return {
         "v": 1,
         "sha256": ingested["sha256"],
+        "file_name": ingested.get("file_name", ""),  # passed through for Lightroom
         "captured_at": ingested["captured_at"],
         "features": feats,
         "timings_ms": timings_ms,

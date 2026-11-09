@@ -294,3 +294,29 @@ func TestInvalidEventIsTerminated(t *testing.T) {
 		t.Fatalf("permanent=%v err=%v", permanent, err)
 	}
 }
+
+// A raw original is uploaded as the raw, under the camera's file name.
+func TestRawOriginalUploadedWithNameAndType(t *testing.T) {
+	h := newHarness(t)
+	content := "sony raw bytes"
+	sum := sha256.Sum256([]byte(content))
+	sha := hex.EncodeToString(sum[:])
+	path := filepath.Join(os.Getenv("SPOOL_DIR"), "photos", sha+".arw")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ev := events.PhotoDecided{V: 1, SHA256: sha, FileName: "DSC01234.ARW", Bucket: events.BucketBest, Rating: 5}
+	if _, err := h.p.attempt(context.Background(), 1, ev); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := h.lr.Get(sha[:32])
+	if !ok {
+		t.Fatal("no asset created")
+	}
+	if a.FileName != "DSC01234.ARW" || a.MasterType != "image/x-sony-arw" || a.MasterSHA256 != sha {
+		t.Fatalf("asset = %+v, want the raw under its camera name", a)
+	}
+}
