@@ -54,6 +54,10 @@ behaviour is observable, not asserted.
 
 ## Capabilities and Constraints
 
+- Camera formats: JPEG and Sony ARW raw. For a raw, Keeper scores the
+  embedded JPEG preview and sends the raw itself to Lightroom under the
+  camera's file name. Real ARW test files from the author's camera are
+  still to come; until then ARW is verified with synthetic TIFF fixtures.
 - Served by the `gateway` service: static HTML, CSS and vanilla JS modules in
   `web/static/`, embedded with `go:embed`. No build step, no framework.
 - Data: `GET /api/photos`, `GET /api/photos/{sha}` (with burst siblings and

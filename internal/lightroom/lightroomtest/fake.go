@@ -21,6 +21,7 @@ type Asset struct {
 	SHA256       string
 	FileName     string
 	MasterSHA256 string
+	MasterType   string // Content-Type of the uploaded original
 	Rating       int
 }
 
@@ -157,6 +158,7 @@ func (s *Server) master(r *http.Request) (int, any) {
 		return errBody(http.StatusConflict, "master already uploaded with different bytes")
 	}
 	a.MasterSHA256 = sum
+	a.MasterType = r.Header.Get("Content-Type")
 	return http.StatusCreated, s.resource(id, a)
 }
 

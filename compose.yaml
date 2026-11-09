@@ -12,7 +12,7 @@ x-go-service: &go-service
 services:
   spool-init: # named volumes start root-owned; every service runs as uid 1000
     image: alpine:3.22
-    command: ["sh", "-c", "mkdir -p /spool/incoming /spool/photos /spool/thumbs && chown -R 1000:1000 /spool"]
+    command: ["sh", "-c", "mkdir -p /spool/incoming /spool/photos /spool/previews /spool/thumbs && chown -R 1000:1000 /spool"]
     volumes:
       - spool:/spool
     restart: "no"

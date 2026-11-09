@@ -25,8 +25,12 @@ def test_analyse_returns_photo_scored_shape(tmp_path, detector):
     assert set(feats) == {"sharpness", "exposure", "eyes", "dhash"}
     assert set(timings) == {"decode", "faces", "sharpness", "exposure", "hash"}
     assert all(t >= 0 for t in timings.values())
-    event = service.scored_event({"sha256": SHA, "captured_at": "2026-11-09T10:00:00Z"}, feats, timings)
-    assert json.loads(json.dumps(event))["v"] == 1
+    event = service.scored_event(
+        {"sha256": SHA, "file_name": "DSC01234.ARW", "captured_at": "2026-11-09T10:00:00Z"}, feats, timings
+    )
+    decoded = json.loads(json.dumps(event))
+    assert decoded["v"] == 1
+    assert decoded["file_name"] == "DSC01234.ARW"  # passed through for Lightroom
 
 
 def test_analyse_raises_for_missing_and_corrupt_files(tmp_path, detector):

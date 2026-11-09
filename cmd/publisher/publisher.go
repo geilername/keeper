@@ -16,6 +16,7 @@ import (
 
 	"github.com/geilername/keeper/internal/events"
 	"github.com/geilername/keeper/internal/lightroom"
+	"github.com/geilername/keeper/internal/media"
 	"github.com/geilername/keeper/internal/natsx"
 	"github.com/geilername/keeper/internal/spool"
 )
@@ -148,7 +149,11 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 // toLightroom runs the three idempotent steps. A redelivery after a crash at
 // any point replays them and ends in the same state.
 func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.PhotoDecided) error {
-	path := spool.PhotoPath(ev.SHA256)
+	// The original as shot (JPEG or ARW raw); Lightroom gets the raw itself.
+	path, err := spool.FindOriginal(ev.SHA256)
+	if err != nil {
+		return spoolError{err}
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return spoolError{err}
@@ -160,8 +165,12 @@ func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.P
 	}
 
 	// 1. Create, or get the existing asset (PUT on a sha-derived ID).
+	name := ev.FileName // the camera's name; the spool name is only the sha
+	if name == "" {
+		name = info.Name()
+	}
 	asset, _, err := p.lr.CreateAsset(ctx, lightroom.NewAsset{
-		ID: assetID, FileName: info.Name(), SHA256: ev.SHA256,
+		ID: assetID, FileName: name, SHA256: ev.SHA256,
 	})
 	if err != nil {
 		return err
@@ -171,7 +180,11 @@ func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.P
 	// The server also answers 200 for the same bytes, so this is only a
 	// shortcut for replays, not what makes the step safe.
 	if asset.MasterSHA256 != ev.SHA256 {
-		if _, err := p.lr.UploadMaster(ctx, assetID, "image/jpeg", f, info.Size()); err != nil {
+		mt, ok := media.TypeOf(path)
+		if !ok {
+			mt = media.JPEG
+		}
+		if _, err := p.lr.UploadMaster(ctx, assetID, string(mt), f, info.Size()); err != nil {
 			return err
 		}
 	}

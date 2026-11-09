@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/geilername/keeper/internal/events"
+	"github.com/geilername/keeper/internal/media"
 	"github.com/geilername/keeper/internal/natsx"
 	"github.com/geilername/keeper/internal/spool"
 	"github.com/geilername/keeper/internal/telemetry"
@@ -79,13 +80,14 @@ func (in *ingester) hook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if ext := strings.ToLower(filepath.Ext(path)); ext != ".jpg" && ext != ".jpeg" {
-		slog.InfoContext(ctx, "ignoring non-JPEG upload", "file", filepath.Base(path))
+	mt, ok := media.TypeOf(path)
+	if !ok {
+		slog.InfoContext(ctx, "ignoring upload that is neither JPEG nor ARW", "file", filepath.Base(path))
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	res, err := in.ingest(ctx, path)
+	res, err := in.ingest(ctx, path, mt)
 	if err != nil {
 		slog.ErrorContext(ctx, "ingest failed", "file", filepath.Base(path), "err", err)
 		http.Error(w, "ingest failed", http.StatusInternalServerError)
@@ -109,7 +111,7 @@ func incomingPath(p string) (string, error) {
 	return clean, nil
 }
 
-func (in *ingester) ingest(ctx context.Context, path string) (result, error) {
+func (in *ingester) ingest(ctx context.Context, path string, mt media.Type) (result, error) {
 	start := time.Now()
 	hookSpan := trace.SpanFromContext(ctx).SpanContext()
 
@@ -121,7 +123,7 @@ func (in *ingester) ingest(ctx context.Context, path string) (result, error) {
 	meta := readMeta(path)
 
 	// Keep the bytes content-addressed before anything else refers to them.
-	if err := linkOrCopy(path, spool.PhotoPath(sha)); err != nil {
+	if err := linkOrCopy(path, spool.OriginalPath(sha, mt.Ext())); err != nil {
 		return result{}, fmt.Errorf("store original: %w", err)
 	}
 
@@ -138,6 +140,7 @@ func (in *ingester) ingest(ctx context.Context, path string) (result, error) {
 		attribute.String("keeper.sha256", sha),
 		attribute.String("keeper.file_name", row.FileName),
 		attribute.Int64("keeper.size_bytes", size),
+		attribute.String("keeper.media_type", string(mt)),
 	}
 
 	if !created {
@@ -182,14 +185,27 @@ func (in *ingester) ingest(ctx context.Context, path string) (result, error) {
 	return result{SHA256: sha, Outcome: "ingested"}, nil
 }
 
-// finish makes the thumbnail and publishes photo.ingested. Safe to repeat:
-// the thumbnail is skipped when present and JetStream drops a duplicate
+// finish makes the preview and thumbnail and publishes photo.ingested. Safe
+// to repeat: existing files are kept and JetStream drops a duplicate
 // Nats-Msg-Id.
 func (in *ingester) finish(ctx context.Context, row photoRow) error {
+	mt, _ := media.TypeOf(row.FileName)
+	original := spool.OriginalPath(row.SHA256, mt.Ext())
+	preview := spool.PreviewPath(row.SHA256)
+
+	_, span := in.tracer.Start(ctx, "preview", trace.WithAttributes(attribute.String("keeper.media_type", string(mt))))
+	err := makePreview(original, mt, readMeta(original).orientation, preview)
+	if err != nil {
+		// Nothing downstream can score this photo: fail the hook loudly.
+		err = fail(span, fmt.Errorf("preview: %w", err))
+		span.End()
+		return err
+	}
+	span.End()
+
 	if _, err := os.Stat(spool.ThumbPath(row.SHA256)); err != nil {
 		tctx, span := in.tracer.Start(ctx, "thumbnail")
-		err := makeThumbnail(spool.PhotoPath(row.SHA256), spool.ThumbPath(row.SHA256))
-		if err != nil {
+		if err := makeThumbnail(preview, spool.ThumbPath(row.SHA256)); err != nil {
 			// The console can live without a thumbnail; the pipeline goes on.
 			span.RecordError(err)
 			slog.WarnContext(tctx, "thumbnail failed", "err", err)
@@ -198,8 +214,8 @@ func (in *ingester) finish(ctx context.Context, row photoRow) error {
 	}
 	ev := events.PhotoIngested{
 		V: events.Version, SHA256: row.SHA256, FileName: row.FileName,
-		Path: spool.PhotoPath(row.SHA256), SizeBytes: row.SizeBytes,
-		CapturedAt: row.CapturedAt, CameraModel: row.CameraModel,
+		Path: preview, OriginalPath: original, MediaType: string(mt),
+		SizeBytes: row.SizeBytes, CapturedAt: row.CapturedAt, CameraModel: row.CameraModel,
 	}
 	if err := natsx.Publish(ctx, in.js, events.SubjectIngested,
 		events.MsgID(events.SubjectIngested, row.SHA256), ev); err != nil {

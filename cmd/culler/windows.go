@@ -33,10 +33,11 @@ type heldMsg interface {
 
 // member is one photo held in an open window, message still unacked.
 type member struct {
-	frame   policy.Frame
-	msg     heldMsg
-	parent  trace.SpanContext // CONSUMER span of the held delivery: parent of the decision span
-	arrived time.Time
+	frame    policy.Frame
+	fileName string // the camera's name, passed on to the publisher
+	msg      heldMsg
+	parent   trace.SpanContext // CONSUMER span of the held delivery: parent of the decision span
+	arrived  time.Time
 }
 
 type window struct {

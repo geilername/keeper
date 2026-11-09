@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// errNoSet is returned when a set name is invalid, missing or has no JPEGs.
+// errNoSet is returned when a set name is invalid, missing or has no photos.
 var errNoSet = errors.New("no such set")
 
 // Set names double as directory names under SETS_DIR, so only allow plain
@@ -23,7 +23,7 @@ type setInfo struct {
 	Frames int    `json:"frames"`
 }
 
-// listSets returns every directory under root that holds at least one JPEG,
+// listSets returns every directory under root that holds at least one photo (JPEG or ARW),
 // sorted by name.
 func listSets(root string) ([]setInfo, error) {
 	entries, err := os.ReadDir(root)
@@ -44,7 +44,7 @@ func listSets(root string) ([]setInfo, error) {
 	return sets, nil
 }
 
-// setFrames returns the JPEGs of one set as absolute paths, in filename
+// setFrames returns the photos (JPEG or ARW) of one set as absolute paths, in filename
 // order, which is the order a camera wrote them in.
 func setFrames(root, name string) ([]string, error) {
 	if !setNameRE.MatchString(name) {
@@ -60,21 +60,22 @@ func setFrames(root, name string) ([]string, error) {
 	}
 	var frames []string
 	for _, e := range entries {
-		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") || !isJPEG(e.Name()) {
+		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") || !isPhoto(e.Name()) {
 			continue
 		}
 		frames = append(frames, filepath.Join(dir, e.Name()))
 	}
 	if len(frames) == 0 {
-		return nil, fmt.Errorf("%w: %q has no JPEGs", errNoSet, name)
+		return nil, fmt.Errorf("%w: %q has no photos", errNoSet, name)
 	}
 	slices.Sort(frames)
 	return frames, nil
 }
 
-func isJPEG(name string) bool {
+// isPhoto: the formats ingest accepts (JPEG and Sony ARW raws).
+func isPhoto(name string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg":
+	case ".jpg", ".jpeg", ".arw":
 		return true
 	}
 	return false
