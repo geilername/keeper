@@ -30,18 +30,6 @@ func thumbSHA(name string) (string, bool) {
 	return sha, true
 }
 
-// traceLinker builds the Dash0 deep link for a photo. The photo trace ID is
-// the first 16 bytes of its sha256 (ADR-6), i.e. the first 32 hex chars.
-type traceLinker struct{ tmpl string } // DASH0_TRACE_URL, contains {trace_id}
-
-func (l traceLinker) link(sha string) (traceID, url string) {
-	traceID = sha[:32]
-	if l.tmpl != "" {
-		url = strings.ReplaceAll(l.tmpl, "{trace_id}", traceID)
-	}
-	return traceID, url
-}
-
 // Snapshot is the photo shape for lists and SSE: everything the console's
 // flow view draws (scores, reasons, per-stage times) without a detail fetch.
 type Snapshot struct {

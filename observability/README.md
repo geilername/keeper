@@ -129,32 +129,31 @@ layouts, because each stage is recorded by exactly one service.
 
 ## Trace deep link (`DASH0_TRACE_URL`)
 
-The console's "Open trace in Dash0" button fills `{trace_id}` into
-`DASH0_TRACE_URL`. Set it in `.env`:
+The console's "Open trace in Dash0" button opens the photo's trace in Dash0's
+trace explorer, with the waterfall open on the photo's root span
+(`photo <file>`). Set it in `.env`:
 
 ```
-DASH0_TRACE_URL=https://app.dash0.com/goto/traces/explorer?dataset=keeper-demo&trace_id={trace_id}
+DASH0_TRACE_URL=https://app.dash0.com/traces/explorer?org=<org-id>&s={dash0_state}
 ```
 
-Replace `keeper-demo` with your dataset. `apply-dash0.sh` prints this line
-for the dataset it used.
+`<org-id>` is the `org=` value in the address bar of any Dash0 page. The
+gateway fills `{dash0_state}` per photo; `apply-dash0.sh` prints the line.
 
-Where the format comes from: it is the link the Dash0 CLI prints for
-`dash0 traces get <trace-id>` ("Open this trace in Dash0"). The CLI builds it
-in `TracesExplorerURL` in Dash0's Go API client
-([`deeplinks.go`](https://github.com/dash0hq/dash0-api-client-go/blob/main/deeplinks.go)):
-`https://app.<domain>/goto/traces/explorer?dataset=<dataset>&trace_id=<id>`,
-where `<domain>` is the last two labels of the API host (`dash0.com`). The
-`dataset` parameter can be left out for the `default` dataset.
+How `{dash0_state}` works: Dash0 keeps the explorer's view in the `s` query
+parameter as JSON, zlib-compressed and base64url-encoded. The gateway builds
+that JSON in the shape of a link copied from Dash0
+([`cmd/gateway/tracelink.go`](../cmd/gateway/tracelink.go)): the dataset
+(`DASH0_DATASET`), a filter `otel.trace.id is <trace id>`, the trace ID and the
+focused span (the root span) in base64, the waterfall open on the overview tab.
+A test decodes it the way Dash0 does and compares it with a copied link.
 
-Not yet checked against a live Dash0 organization. To check it, or to copy
-the format from the UI instead:
-
-1. Run `dash0 traces get <trace-id> --dataset keeper-demo` with any trace ID
-   from the console. The CLI prints the link under "Open this trace in
-   Dash0"; open it.
-2. Or open any trace in Dash0's trace explorer, copy the address from the
-   browser, and replace the trace ID in it with `{trace_id}`.
+Other placeholders, for templates of your own: `{trace_id}` (32 hex) and
+`{span_id}` (the root span, 16 hex). The CLI's link format
+`https://app.<domain>/goto/traces/explorer?dataset=<dataset>&trace_id={trace_id}`
+(from Dash0's [`deeplinks.go`](https://github.com/dash0hq/dash0-api-client-go/blob/main/deeplinks.go))
+was rejected by the live organization with "Invalid parameters: dataset", so
+the explorer view link is the default.
 
 ## Sources
 

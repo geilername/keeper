@@ -71,6 +71,8 @@ spec:
             - { name: ADOBE_REDIRECT_URI, value: {{ $root.Values.lightroom.redirectURI | quote }} }
             - name: DASH0_TRACE_URL
               valueFrom: { secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: DASH0_TRACE_URL, optional: true } }
+            - name: DASH0_DATASET # part of the Dash0 view state in trace links
+              valueFrom: { secretKeyRef: { name: {{ $root.Values.secrets.name }}, key: DASH0_DATASET, optional: true } }
             {{- if $root.Values.console.https.enabled }}
             - name: HTTPS_ADDR
               value: ":8443"

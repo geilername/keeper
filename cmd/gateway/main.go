@@ -31,7 +31,8 @@ type config struct {
 	httpsAddr   string // optional TLS listener (the Adobe OAuth callback must be https)
 	tlsCert     string
 	tlsKey      string
-	traceURL    string // Dash0 trace deep link template with {trace_id}
+	traceURL    string // Dash0 trace deep link template, see tracelink.go
+	dataset     string // DASH0_DATASET, for the Dash0 view state
 	demoAdmin   string // lightroom-mock admin base URL; empty = demo controls off
 	esURL       string // Elasticsearch for /api/search; empty disables it
 	lightroom   lrConfig
@@ -46,6 +47,7 @@ func loadConfig() config {
 		tlsCert:     os.Getenv("TLS_CERT_FILE"),
 		tlsKey:      os.Getenv("TLS_KEY_FILE"),
 		traceURL:    os.Getenv("DASH0_TRACE_URL"),
+		dataset:     env("DASH0_DATASET", "keeper-demo"),
 		demoAdmin:   demoAdminURL(),
 		esURL:       os.Getenv("ELASTICSEARCH_URL"),
 		lightroom:   loadLRConfig(),
@@ -108,7 +110,7 @@ func run(ctx context.Context, cfg config) error {
 	}
 	defer func() { _ = m.Close() }()
 
-	links := traceLinker{tmpl: cfg.traceURL}
+	links := traceLinker{tmpl: cfg.traceURL, dataset: cfg.dataset}
 	bc := NewBroadcaster()
 	pr := &projector{store: store, bc: bc, metrics: m, links: links}
 	a := &api{store: store, bc: bc, links: links, web: web.FS()}
