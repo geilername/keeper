@@ -110,6 +110,7 @@ type api struct {
 	bc    *Broadcaster
 	links traceLinker
 	web   fs.FS
+	demo  *demoProxy // nil unless DEMO_CONTROLS=1
 }
 
 const (
@@ -128,6 +129,7 @@ func (a *api) routes() http.Handler {
 	mux.HandleFunc("GET /api/bursts/{id}", a.getBurst)
 	mux.HandleFunc("GET /api/events", a.bc.ServeSSE)
 	mux.HandleFunc("GET /thumbs/{name}", a.thumb)
+	a.demo.register(mux)
 	mux.Handle("GET /", http.FileServerFS(a.web))
 
 	return otelhttp.NewHandler(mux, "gateway",

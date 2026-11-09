@@ -25,6 +25,7 @@ type config struct {
 	databaseURL string
 	httpAddr    string
 	traceURL    string // Dash0 trace deep link template with {trace_id}
+	demoAdmin   string // lightroom-mock admin base URL; empty = demo controls off
 }
 
 func loadConfig() config {
@@ -33,7 +34,16 @@ func loadConfig() config {
 		databaseURL: env("DATABASE_URL", "postgres://keeper:keeper@postgres:5432/keeper"),
 		httpAddr:    env("HTTP_ADDR", ":8080"),
 		traceURL:    os.Getenv("DASH0_TRACE_URL"),
+		demoAdmin:   demoAdminURL(),
 	}
+}
+
+// demoAdminURL enables the console's fault panel only for DEMO_CONTROLS=1.
+func demoAdminURL() string {
+	if os.Getenv("DEMO_CONTROLS") != "1" {
+		return ""
+	}
+	return env("LIGHTROOM_ADMIN_URL", "http://lightroom-mock:8080")
 }
 
 func env(key, def string) string {
@@ -88,6 +98,10 @@ func run(ctx context.Context, cfg config) error {
 	bc := NewBroadcaster()
 	pr := &projector{store: store, bc: bc, metrics: m, links: links}
 	a := &api{store: store, bc: bc, links: links, web: web.FS()}
+	if cfg.demoAdmin != "" {
+		a.demo = newDemoProxy(cfg.demoAdmin)
+		slog.InfoContext(ctx, "demo controls enabled", "lightroom_admin", cfg.demoAdmin)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.httpAddr,

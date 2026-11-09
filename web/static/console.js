@@ -2,6 +2,8 @@
 // Data: GET /api/photos (snapshot list) + SSE /api/events ("photo" events).
 // Rendering is keyed by sha256 and burst, so prints move instead of reloading.
 
+import { startDemo } from './demo.js';
+
 const BURST_GAP_MS = 2000;       // culler BURST_GAP, for bursts still forming
 const WINDOW_IDLE_MS = 20000;    // culler BURST_IDLE
 const WINDOW_MAX_MS = 90000;     // culler BURST_MAX_WAIT
@@ -200,6 +202,7 @@ function render() {
   }
   markSelected();
   renderRecord(now);
+  demoRender();
   fresh.clear();
 }
 
@@ -513,5 +516,14 @@ function connect() {
 
 $('close').addEventListener('click', () => $('sheet').classList.remove('open'));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') $('sheet').classList.remove('open'); });
+// Demo fault panel: compares the Lightroom mock's asset count with Keeper's.
+const demoRender = startDemo(() => {
+  const list = [...photos.values()];
+  return {
+    published: list.filter(p => p.stage === 'published').length,
+    onTheWay: list.filter(p => ['decided', 'publishing', 'retrying'].includes(p.stage)).length,
+  };
+});
+
 setInterval(schedule, 1000); // countdowns and "ago" lines
 connect();

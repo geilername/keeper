@@ -181,6 +181,10 @@ services:
       NATS_URL: nats://nats:4222
       DATABASE_URL: postgres://keeper:keeper@postgres:5432/keeper
       DASH0_TRACE_URL: ${DASH0_TRACE_URL:-} # template with {trace_id}
+      # Console fault panel (demo only): proxies /api/demo/* to lightroom-mock's
+      # /admin API. Set DEMO_CONTROLS=0 to hide the panel and 404 the routes.
+      DEMO_CONTROLS: ${DEMO_CONTROLS:-1}
+      LIGHTROOM_ADMIN_URL: http://lightroom-mock:8080
     volumes:
       - spool:/spool:ro
     depends_on:
