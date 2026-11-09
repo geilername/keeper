@@ -132,6 +132,42 @@ func TestDecide(t *testing.T) {
 			best: "a", bestWhy: "strongest frame (sharpness 0.60)",
 		},
 		{
+			// Review finding: with an even count the midpoint of two exposure
+			// groups more than 2 stops apart matched no frame, so every frame
+			// looked "off". Each frame is now measured against the nearer
+			// middle value, so a stage-light change mid-burst rejects nobody.
+			name: "stage light changes mid-burst: two exposure groups, nobody is off",
+			frames: []Frame{
+				frame("a", 0.60, 0.2, noFace),
+				frame("b", 0.60, 0.2, noFace),
+				frame("c", 0.62, 0.4, noFace),
+				frame("d", 0.60, 0.4, noFace),
+			},
+			want: []want{
+				{events.BucketKeeper, []string{"as good as the rest of the burst (sharpness 0.60, best 0.62)"}},
+				{events.BucketKeeper, []string{"as good as the rest of the burst (sharpness 0.60, best 0.62)"}},
+				{events.BucketBest, []string{"sharpest frame (sharpness 0.62)"}},
+				{events.BucketKeeper, []string{"as good as the rest of the burst (sharpness 0.60, best 0.62)"}},
+			},
+			best: "c", bestWhy: "sharpest frame (sharpness 0.62)",
+		},
+		{
+			name: "even burst: the off frame's gap is measured to the nearer middle value",
+			frames: []Frame{
+				frame("a", 0.60, 0.4, noFace),
+				frame("b", 0.60, 0.4, noFace),
+				frame("c", 0.60, 0.4, noFace),
+				frame("d", 0.60, 0.2, noFace),
+			},
+			want: []want{
+				{events.BucketBest, []string{"sharpest frame (sharpness 0.60)"}},
+				{events.BucketKeeper, []string{"as good as the rest of the burst (sharpness 0.60, best 0.60)"}},
+				{events.BucketKeeper, []string{"as good as the rest of the burst (sharpness 0.60, best 0.60)"}},
+				{events.BucketReject, []string{"darker than the rest of the burst (−2 1/3 EV)"}},
+			},
+			best: "a", bestWhy: "sharpest frame (sharpness 0.60)",
+		},
+		{
 			name: "a visible face beats a sharper frame without one",
 			frames: []Frame{
 				frame("a", 0.70, 0.4, noFace),

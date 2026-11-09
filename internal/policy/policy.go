@@ -86,11 +86,27 @@ type Result struct {
 
 // burst is what the relative checks compare against.
 type burst struct {
-	size      int
-	sharpest  float64
-	medianEV  float64
-	anyOpen   bool // some usable frame has a face with eyes open
-	anyClosed bool
+	size     int
+	sharpest float64
+	// lowEV and highEV are the middle exposures of the usable frames: equal
+	// for an odd count, the two middle values for an even one. A frame is
+	// measured against the nearer of them, never against their midpoint,
+	// which may match no frame at all (stage light changing mid-burst).
+	lowEV, highEV float64
+	anyOpen       bool // some usable frame has a face with eyes open
+	anyClosed     bool
+}
+
+// offEV is how far a frame's exposure is from the burst's middle: zero
+// between the two middle values, otherwise the distance to the nearer one.
+func (b burst) offEV(ev float64) float64 {
+	switch {
+	case ev < b.lowEV:
+		return ev - b.lowEV
+	case ev > b.highEV:
+		return ev - b.highEV
+	}
+	return 0
 }
 
 // Decide applies the conference profile to one burst. frames must not be empty.
@@ -116,7 +132,7 @@ func Decide(frames []Frame) Result {
 		b.anyOpen = b.anyOpen || f.Eyes.State == events.EyesOpen
 		b.anyClosed = b.anyClosed || f.Eyes.State == events.EyesClosed
 	}
-	b.medianEV = median(evs)
+	b.lowEV, b.highEV = middle(evs)
 
 	// 3. Relative checks; the best frame is the strongest that passes them.
 	// If none passes (the whole burst shares a problem), the strongest usable
@@ -200,7 +216,7 @@ func relative(f Frame, b burst) []string {
 	if s := f.Features.Sharpness.Score; s < MinRelativeSharpness*b.sharpest {
 		reasons = append(reasons, fmt.Sprintf("blurred next to the rest of the burst (sharpness %.2f, sharpest %.2f)", s, b.sharpest))
 	}
-	if off := EV(f.Features.Exposure.Mean) - b.medianEV; math.Abs(off) > MaxExposureOffEV {
+	if off := b.offEV(EV(f.Features.Exposure.Mean)); math.Abs(off) > MaxExposureOffEV {
 		side := "darker"
 		if off > 0 {
 			side = "brighter"
@@ -213,7 +229,7 @@ func relative(f Frame, b burst) []string {
 // stronger ranks usable frames for best. At a conference people come first:
 // open eyes beat closed or unseen ones when the burst has a blink in it, a
 // visible face beats none, then the sharper frame, then the one nearer the
-// burst's exposure, then the earlier one, then sha256 so the result never
+// burst's middle exposure, then the earlier one, then sha256 so the result never
 // depends on input order.
 func stronger(a, c Frame, b burst) bool {
 	if b.anyOpen && b.anyClosed {
@@ -227,8 +243,8 @@ func stronger(a, c Frame, b burst) bool {
 	if x := cmp.Compare(a.Features.Sharpness.Score, c.Features.Sharpness.Score); x != 0 {
 		return x > 0
 	}
-	da := math.Abs(EV(a.Features.Exposure.Mean) - b.medianEV)
-	dc := math.Abs(EV(c.Features.Exposure.Mean) - b.medianEV)
+	da := math.Abs(b.offEV(EV(a.Features.Exposure.Mean)))
+	dc := math.Abs(b.offEV(EV(c.Features.Exposure.Mean)))
 	if x := cmp.Compare(da, dc); x != 0 {
 		return x < 0
 	}
@@ -282,15 +298,17 @@ func Stops(ev float64) string {
 	return fmt.Sprintf("%s%d %d/3", sign, whole, rest)
 }
 
-func median(xs []float64) float64 {
+// middle returns the middle value of xs twice for an odd count, and the two
+// middle values for an even one.
+func middle(xs []float64) (low, high float64) {
 	if len(xs) == 0 {
-		return 0
+		return 0, 0
 	}
 	s := slices.Clone(xs)
 	slices.Sort(s)
-	if n := len(s); n%2 == 1 {
-		return s[n/2]
-	} else {
-		return (s[n/2-1] + s[n/2]) / 2
+	n := len(s)
+	if n%2 == 1 {
+		return s[n/2], s[n/2]
 	}
+	return s[n/2-1], s[n/2]
 }
