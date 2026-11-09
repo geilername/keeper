@@ -1,0 +1,76 @@
+# Keeper check rules.
+#
+# Format: PrometheusRule CRD (monitoring.coreos.com/v1). `dash0 apply` turns
+# every alerting rule into one Dash0 check rule named "<group> - <alert>",
+# with ID "<dash0.com/id>--<slug of that name>", so re-applying updates the
+# same three check rules. Apply with observability/apply-dash0.sh.
+#
+# Metrics are selected by their OpenTelemetry name (`otel_metric_name`), as in
+# the dashboard; see observability/README.md, "Metric names". Services export
+# metrics every 10 s, so 2 m and 5 m windows always hold enough points.
+# Tested with promtool in observability/dash0-tests/check-rules-test.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: keeper-checks
+  labels:
+    dash0.com/id: keeper-checks
+spec:
+  groups:
+    - name: Keeper
+      interval: 1m
+      rules:
+        # The fault demo: lightroom-mock answers 503, the publisher naks and
+        # JetStream redelivers with backoff (2 s, 5 s, 15 s, 30 s). Each
+        # refused attempt counts as result="retry".
+        - alert: Lightroom publish retrying
+          expr: >-
+            sum(increase({otel_metric_name="keeper.publish.attempts", otel_metric_type="sum", result="retry"}[2m])) > 0
+          for: 1m
+          labels:
+            app: keeper
+            severity: warning
+          annotations:
+            summary: Lightroom is refusing photos. Keeper is retrying.
+            description: >-
+              {{ $value | printf "%.0f" }} publish attempts were refused in the
+              last 2 minutes. The photos wait in JetStream and are sent again
+              with backoff; none is lost or sent twice. Publishing resumes on
+              its own once Lightroom answers. If it does not, check Lightroom
+              (in the demo, lightroom-mock's /admin/faults).
+
+        # A consumer that does not keep up: scorer stopped, culler stuck,
+        # publisher held by an outage. The gateway reads pending counts from
+        # JetStream consumer info.
+        - alert: Consumer backlog
+          expr: >-
+            max by (consumer) ({otel_metric_name="keeper.consumer.pending"}) > 20
+          for: 2m
+          labels:
+            app: keeper
+            severity: warning
+          annotations:
+            summary: "{{ $labels.consumer }} is behind: {{ $value | printf \"%.0f\" }} messages waiting."
+            description: >-
+              More than 20 messages have waited for the {{ $labels.consumer }}
+              consumer for 2 minutes. They stay in JetStream until it catches
+              up; nothing is lost. Check that {{ $labels.consumer }} is running
+              and look at its latest spans for errors.
+
+        # Camera to Lightroom. A photo normally waits about 20 s in its burst
+        # window (90 s at most), so a p95 above 60 s for 5 m means something
+        # downstream is slow or retrying, not a long burst.
+        - alert: Photos slow to reach Lightroom
+          expr: >-
+            histogram_quantile(0.95, sum(rate({otel_metric_name="keeper.photo.e2e.duration", otel_metric_type="histogram"}[5m]))) > 60
+          for: 5m
+          labels:
+            app: keeper
+            severity: warning
+          annotations:
+            summary: "Photos take {{ $value | printf \"%.0f\" }} s to reach Lightroom (p95)."
+            description: >-
+              For 5 minutes, 1 photo in 20 has taken longer than 60 s from the
+              camera to Lightroom. A burst alone accounts for about 20 s. Look
+              at publish retries and consumer backlog on the Keeper pipeline
+              dashboard, then open a slow photo's trace.

@@ -1,0 +1,219 @@
+# Keeper pipeline: one dashboard for the whole photo flow.
+#
+# Format: Perses dashboard CRD (CNCF Perses, perses.dev/v1alpha1). Dash0's CLI
+# (`dash0 apply`) and the Dash0 Kubernetes operator both accept it and convert
+# it to a Dash0 dashboard. Apply with observability/apply-dash0.sh.
+#
+# Queries select metrics by their OpenTelemetry name through the
+# `otel_metric_name` label (Dash0's recommended way), not by the
+# Prometheus-translated name. See observability/README.md, "Metric names".
+# Histograms are queried without `_bucket`/`le`: Dash0 serves OTel histograms
+# as native histograms on this selector.
+apiVersion: perses.dev/v1alpha1
+kind: PersesDashboard
+metadata:
+  name: keeper-pipeline
+  labels:
+    # Fixed ID: makes `dash0 apply` an upsert (PUT) instead of a new dashboard
+    # on every run.
+    dash0.com/id: 9fa08dde-f243-4930-adab-245f940af9af
+spec:
+  display:
+    name: Keeper pipeline
+    description: >-
+      Photos from camera to Lightroom: flow, decisions, time per stage,
+      backlog and publish retries.
+  duration: 1h
+  refreshInterval: 30s
+
+  layouts:
+    - kind: Grid
+      spec:
+        display:
+          title: Flow
+          collapse:
+            open: true
+        items:
+          - { x: 0, "y": 0, width: 12, height: 8, content: { $ref: "#/spec/panels/photos-per-minute" } }
+          - { x: 12, "y": 0, width: 12, height: 8, content: { $ref: "#/spec/panels/e2e-duration" } }
+          - { x: 0, "y": 8, width: 12, height: 8, content: { $ref: "#/spec/panels/decisions-by-bucket" } }
+          - { x: 12, "y": 8, width: 12, height: 8, content: { $ref: "#/spec/panels/bursts-open" } }
+    - kind: Grid
+      spec:
+        display:
+          title: Health
+          collapse:
+            open: true
+        items:
+          - { x: 0, "y": 0, width: 12, height: 8, content: { $ref: "#/spec/panels/publish-attempts" } }
+          - { x: 12, "y": 0, width: 12, height: 8, content: { $ref: "#/spec/panels/consumer-backlog" } }
+          - { x: 0, "y": 8, width: 24, height: 8, content: { $ref: "#/spec/panels/stage-duration" } }
+
+  panels:
+    photos-per-minute:
+      kind: Panel
+      spec:
+        display:
+          name: Photos per minute, by outcome
+          description: >-
+            keeper.photos: ingested, duplicate and resumed (ingest); published
+            and failed (publisher).
+        plugin:
+          kind: TimeSeriesChart
+          spec: &chart-per-minute
+            legend: { mode: list, position: bottom, showLegend: true }
+            visual: { display: line, lineWidth: 1.5, areaOpacity: 0.1, connectNulls: false, palette: { mode: auto } }
+            yAxis: { show: true, min: 0, format: { unit: decimal, decimalPlaces: 1 } }
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    60 * sum by (outcome) (rate({otel_metric_name="keeper.photos", otel_metric_type="sum"}[$__rate_interval]))
+                  seriesNameFormat: "{{outcome}}"
+
+    e2e-duration:
+      kind: Panel
+      spec:
+        display:
+          name: Camera to Lightroom, p50 and p95
+          description: >-
+            keeper.photo.e2e.duration, recorded by the gateway when a photo is
+            first published. Includes the burst window (20 s of quiet, 90 s at
+            most). The check rule fires when p95 stays above 60 s for 5 m.
+        plugin:
+          kind: TimeSeriesChart
+          spec: &chart-seconds
+            legend: { mode: list, position: bottom, showLegend: true }
+            visual: { display: line, lineWidth: 1.5, areaOpacity: 0.1, connectNulls: false, palette: { mode: auto } }
+            yAxis: { show: true, min: 0, format: { unit: seconds, decimalPlaces: 1 } }
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    histogram_quantile(0.5, sum(rate({otel_metric_name="keeper.photo.e2e.duration", otel_metric_type="histogram"}[$__rate_interval])))
+                  seriesNameFormat: p50
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    histogram_quantile(0.95, sum(rate({otel_metric_name="keeper.photo.e2e.duration", otel_metric_type="histogram"}[$__rate_interval])))
+                  seriesNameFormat: p95
+
+    decisions-by-bucket:
+      kind: Panel
+      spec:
+        display:
+          name: Decisions per minute, by bucket
+          description: keeper.decisions from the culler. best 5★, keeper 3★, reject 1★.
+        plugin:
+          kind: TimeSeriesChart
+          spec: *chart-per-minute
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    60 * sum by (bucket) (rate({otel_metric_name="keeper.decisions", otel_metric_type="sum"}[$__rate_interval]))
+                  seriesNameFormat: "{{bucket}}"
+
+    bursts-open:
+      kind: Panel
+      spec:
+        display:
+          name: Burst windows open
+          description: >-
+            keeper.burst.open (up-down counter) from the culler. A window
+            closes after 20 s of quiet, or 90 s at most.
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend: { mode: list, position: bottom, showLegend: false }
+            visual: { display: line, lineWidth: 1.5, areaOpacity: 0.1, connectNulls: false, palette: { mode: auto } }
+            yAxis: { show: true, min: 0, format: { unit: decimal, decimalPlaces: 0 } }
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    sum({otel_metric_name="keeper.burst.open"})
+                  seriesNameFormat: open
+
+    publish-attempts:
+      kind: Panel
+      spec:
+        display:
+          name: Lightroom publish attempts per minute, by result
+          description: >-
+            keeper.publish.attempts: ok, retry (Lightroom or NATS refused,
+            JetStream redelivers with backoff) and failed (gave up). Any retry
+            for 1 m fires the "Lightroom publish retrying" check.
+        plugin:
+          kind: TimeSeriesChart
+          spec: *chart-per-minute
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    60 * sum by (result) (rate({otel_metric_name="keeper.publish.attempts", otel_metric_type="sum"}[$__rate_interval]))
+                  seriesNameFormat: "{{result}}"
+
+    consumer-backlog:
+      kind: Panel
+      spec:
+        display:
+          name: Messages waiting, by consumer
+          description: >-
+            keeper.consumer.pending: messages in the stream not yet delivered
+            to each JetStream consumer, read by the gateway. A consumer that
+            never started has no series (not 0).
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend: { mode: list, position: bottom, showLegend: true }
+            visual: { display: line, lineWidth: 1.5, areaOpacity: 0.1, connectNulls: false, palette: { mode: auto } }
+            yAxis: { show: true, min: 0, format: { unit: decimal, decimalPlaces: 0 } }
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    max by (consumer) ({otel_metric_name="keeper.consumer.pending"})
+                  seriesNameFormat: "{{consumer}}"
+
+    stage-duration:
+      kind: Panel
+      spec:
+        display:
+          name: Time per stage, p95
+          description: >-
+            keeper.stage.duration by stage: ingest, score, cull, publish. cull
+            is the wait in the burst window, so it dwarfs the others by design.
+        plugin:
+          kind: TimeSeriesChart
+          spec: *chart-seconds
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  query: >-
+                    histogram_quantile(0.95, sum by (stage) (rate({otel_metric_name="keeper.stage.duration", otel_metric_type="histogram"}[$__rate_interval])))
+                  seriesNameFormat: "{{stage}}"
