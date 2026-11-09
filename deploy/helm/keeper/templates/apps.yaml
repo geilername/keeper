@@ -41,6 +41,9 @@ spec:
               value: http://elasticsearch:9200
             {{- end }}
             {{- if eq $name "publisher" }}
+            # Rated copies of raws (star rating embedded in the XMP) are written
+            # here before upload and deleted once published.
+            - { name: RATED_DIR, value: /scratch/rated }
             {{- if $root.Values.lightroomMock.enabled }}
             - { name: LIGHTROOM_MODE, value: mock }
             - { name: LIGHTROOM_URL, value: "http://lightroom-mock:8080" }
@@ -108,6 +111,10 @@ spec:
               mountPath: /etc/keeper/tls
               readOnly: true
             {{- end }}
+            {{- if eq $name "publisher" }}
+            - name: scratch
+              mountPath: /scratch
+            {{- end }}
       volumes:
         {{- if $app.spool }}
         - name: spool
@@ -116,6 +123,10 @@ spec:
         {{- if and (eq $name "gateway") $root.Values.console.https.enabled }}
         - name: tls
           secret: { secretName: {{ $root.Values.secrets.tlsName }} }
+        {{- end }}
+        {{- if eq $name "publisher" }}
+        - name: scratch
+          emptyDir: { sizeLimit: {{ $root.Values.apps.publisher.scratchSize | default "2Gi" }} }
         {{- end }}
 {{- if and $app.port (ne $name "gateway") }}
 ---

@@ -50,6 +50,8 @@ apps:
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
   publisher:
     spool: ro
+    # Scratch space for rated copies of raws (one raw per photo in flight).
+    scratchSize: 2Gi
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 512Mi } }
   gateway:
     port: 8080
