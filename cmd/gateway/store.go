@@ -45,6 +45,17 @@ ALTER TABLE gateway.photos ADD COLUMN IF NOT EXISTS retry_at timestamptz;
 CREATE INDEX IF NOT EXISTS photos_seen_at_idx ON gateway.photos (seen_at DESC, sha256);
 CREATE INDEX IF NOT EXISTS photos_burst_id_idx ON gateway.photos (burst_id) WHERE burst_id <> '';
 
+-- The Adobe Lightroom grant: one row. sealed is AES-256-GCM (KEEPER_TOKEN_KEY)
+-- of {"access_token", "refresh_token"}; nothing here is readable without the key.
+CREATE TABLE IF NOT EXISTS gateway.lightroom_auth (
+	id           smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+	sealed       bytea NOT NULL,
+	expires_at   timestamptz NOT NULL,
+	account_id   text NOT NULL DEFAULT '',
+	account_name text NOT NULL DEFAULT '',
+	updated_at   timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS gateway.bursts (
 	burst_id     text PRIMARY KEY,
 	members      text[] NOT NULL,
@@ -216,6 +227,32 @@ func (s *Store) GetBurst(ctx context.Context, id string) (Burst, error) {
 	}
 	b.DecidedAt = b.DecidedAt.UTC()
 	return b, err
+}
+
+// LoadLightroomAuth reads the sealed grant; ok is false when nobody has
+// connected.
+func (s *Store) LoadLightroomAuth(ctx context.Context) (authRow, bool, error) {
+	var r authRow
+	err := s.pool.QueryRow(ctx, `
+		SELECT sealed, expires_at, account_id, account_name, updated_at
+		FROM gateway.lightroom_auth WHERE id = 1`,
+	).Scan(&r.Sealed, &r.ExpiresAt, &r.AccountID, &r.AccountName, &r.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, false, nil
+	}
+	r.ExpiresAt, r.UpdatedAt = r.ExpiresAt.UTC(), r.UpdatedAt.UTC()
+	return r, err == nil, err
+}
+
+// SaveLightroomAuth replaces the sealed grant.
+func (s *Store) SaveLightroomAuth(ctx context.Context, r authRow) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO gateway.lightroom_auth (id, sealed, expires_at, account_id, account_name)
+		VALUES (1, $1, $2, $3, $4)
+		ON CONFLICT (id) DO UPDATE SET sealed = excluded.sealed, expires_at = excluded.expires_at,
+			account_id = excluded.account_id, account_name = excluded.account_name, updated_at = now()`,
+		r.Sealed, r.ExpiresAt, r.AccountID, r.AccountName)
+	return err
 }
 
 func collectPhotos(rows pgx.Rows) ([]Photo, error) {

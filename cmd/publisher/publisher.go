@@ -16,6 +16,7 @@ import (
 
 	"github.com/geilername/keeper/internal/events"
 	"github.com/geilername/keeper/internal/lightroom"
+	"github.com/geilername/keeper/internal/lrlink"
 	"github.com/geilername/keeper/internal/media"
 	"github.com/geilername/keeper/internal/natsx"
 	"github.com/geilername/keeper/internal/spool"
@@ -31,17 +32,31 @@ const classSpool = "spool_unreadable"
 // the JetStream handle, in tests a recorder.
 type emitFunc func(ctx context.Context, subject, msgID string, v any) error
 
+// albumAdder and targetSource are the Adobe-only parts: where photos go
+// (the collection picked in the console, from the keeper-lightroom bucket)
+// and how they get there. Both are nil in mock mode, which has no albums.
+type albumAdder interface {
+	AddToAlbum(ctx context.Context, albumID string, assetIDs []string) error
+}
+
+type targetSource interface {
+	Target() (lrlink.Target, bool)
+}
+
 type publisher struct {
 	lr         lightroom.Client
+	albums     albumAdder   // nil: no album step (mock)
+	targets    targetSource // nil: no album step (mock)
 	emit       emitFunc
 	maxDeliver int
 	backoff    []time.Duration // same slice natsx uses for nak delays
 	now        func() time.Time
 
-	tracer   trace.Tracer
-	attempts metric.Int64Counter
-	photos   metric.Int64Counter
-	duration metric.Float64Histogram
+	tracer    trace.Tracer
+	attempts  metric.Int64Counter
+	photos    metric.Int64Counter
+	duration  metric.Float64Histogram
+	albumAdds metric.Int64Counter
 }
 
 func newPublisher(lr lightroom.Client, emit emitFunc, cfg natsx.ConsumerConfig,
@@ -56,23 +71,61 @@ func newPublisher(lr lightroom.Client, emit emitFunc, cfg natsx.ConsumerConfig,
 	duration, err3 := meter.Float64Histogram("keeper.stage.duration",
 		metric.WithDescription("Time per pipeline stage attempt"),
 		metric.WithUnit("s"))
-	if err := errors.Join(err1, err2, err3); err != nil {
+	albumAdds, err4 := meter.Int64Counter("keeper.lightroom.album.adds",
+		metric.WithDescription("Adds to the target Lightroom collection by result (ok, no_target, refused, error)"),
+		metric.WithUnit("{asset}"))
+	if err := errors.Join(err1, err2, err3, err4); err != nil {
 		return nil, err
 	}
 	return &publisher{
 		lr: lr, emit: emit, maxDeliver: cfg.MaxDeliver, backoff: cfg.BackOff, now: time.Now,
-		tracer: tracer, attempts: attempts, photos: photos, duration: duration,
+		tracer: tracer, attempts: attempts, photos: photos, duration: duration, albumAdds: albumAdds,
 	}, nil
+}
+
+// withAlbums turns on the album step (Adobe mode).
+func (p *publisher) withAlbums(a albumAdder, t targetSource) *publisher {
+	p.albums, p.targets = a, t
+	return p
 }
 
 // handle is the natsx handler: nil → ack, Permanent → term, else nak with
 // backoff.
 func (p *publisher) handle(ctx context.Context, m natsx.Msg, ev events.PhotoDecided) error {
+	stop := keepAlive(ctx, m, inProgressEvery)
 	permanent, err := p.attempt(ctx, m.Delivered, ev)
+	stop()
 	if permanent {
 		return natsx.Permanent(err)
 	}
 	return err
+}
+
+// inProgressEvery is well inside the 30 s AckWait.
+const inProgressEvery = 10 * time.Second
+
+// keepAlive tells JetStream every interval that m is still being worked on,
+// until stop is called.
+func keepAlive(ctx context.Context, m natsx.Msg, every time.Duration) (stop func()) {
+	if m.Msg == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = m.InProgress()
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // attempt runs one delivery of photo.decided. It returns the error (nil on
@@ -121,7 +174,8 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 		return false, lrErr
 	}
 	last := p.maxDeliver > 0 && delivered >= p.maxDeliver // -1: unlimited
-	failed := events.PhotoFailed{V: events.Version, SHA256: ev.SHA256, Attempt: delivered, ErrorClass: class}
+	failed := events.PhotoFailed{V: events.Version, SHA256: ev.SHA256, Attempt: delivered, ErrorClass: class,
+		Error: failureText(lrErr)}
 	if retryable && !last {
 		at := p.now().Add(p.backoff[min(delivered, len(p.backoff))-1]).UTC()
 		failed.RetryAt = &at
@@ -146,9 +200,21 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 	return true, lrErr
 }
 
-// toLightroom runs the three idempotent steps. A redelivery after a crash at
-// any point replays them and ends in the same state.
+// toLightroom runs the idempotent steps. A redelivery after a crash at any
+// point replays them and ends in the same state.
 func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.PhotoDecided) error {
+	// 0. Adobe: know the collection before anything goes into the
+	// catalogue. Until one is picked, the photo waits (retried every 30 s).
+	var target lrlink.Target
+	if p.targets != nil {
+		t, ok := p.targets.Target()
+		if !ok {
+			p.albumAdds.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "no_target")))
+			return errNoTarget
+		}
+		target = t
+	}
+
 	// The original as shot (JPEG or ARW raw); Lightroom gets the raw itself.
 	path, err := spool.FindOriginal(ev.SHA256)
 	if err != nil {
@@ -189,8 +255,83 @@ func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.P
 		}
 	}
 
-	// 3. Set the rating (a set, not an increment).
-	return p.lr.SetRating(ctx, assetID, ev.Rating)
+	// 3. Set the rating (a set, not an increment). The Adobe Partner API
+	// cannot write one; the rating then stays in Keeper only.
+	err = p.lr.SetRating(ctx, assetID, ev.Rating)
+	written := err == nil
+	if errors.Is(err, lightroom.ErrRatingUnsupported) {
+		err = nil
+	}
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("keeper.lightroom.rating_written", written))
+	if err != nil || p.albums == nil {
+		return err
+	}
+
+	// 4. Add the asset to the chosen collection.
+	return p.addToAlbum(ctx, assetID, target)
+}
+
+// addToAlbum is step 4 in its own span. Already in the collection counts
+// as added (a replay); a 403 for the collection is permanent.
+func (p *publisher) addToAlbum(ctx context.Context, assetID string, target lrlink.Target) error {
+	ctx, span := p.tracer.Start(ctx, "lightroom.add_to_album", trace.WithAttributes(
+		attribute.String("keeper.lightroom.album.id", target.AlbumID),
+		attribute.String("keeper.lightroom.album.name", target.Name),
+		attribute.String("keeper.lightroom.asset_id", assetID),
+	))
+	defer span.End()
+
+	err := p.albums.AddToAlbum(ctx, target.AlbumID, []string{assetID})
+	result := "ok"
+	var refused *lightroom.AlbumRefusedError
+	switch {
+	case errors.As(err, &refused):
+		result = "refused"
+		err = albumRefusedError{name: target.Name, err: refused}
+	case err != nil:
+		result = "error"
+	}
+	span.SetAttributes(attribute.String("keeper.lightroom.album.result", result))
+	p.albumAdds.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+	if err != nil {
+		class, _ := classify(err)
+		span.SetAttributes(attribute.String("error.type", class))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
+// errNoTarget: Adobe mode, but nobody picked a collection in the console.
+var errNoTarget = errors.New("no Lightroom collection chosen")
+
+// albumRefusedError names the collection for the console.
+type albumRefusedError struct {
+	name string
+	err  *lightroom.AlbumRefusedError
+}
+
+func (e albumRefusedError) Error() string {
+	return "Lightroom refused collection " + e.name + ": " + e.err.Error()
+}
+func (e albumRefusedError) Unwrap() error { return e.err }
+
+// failureText is the console's words for a failure, when the class alone
+// would not tell the photographer what to do.
+func failureText(err error) string {
+	var refused albumRefusedError
+	switch {
+	case errors.Is(err, errNoTarget):
+		return "No Lightroom collection chosen: pick one in the console"
+	case errors.As(err, &refused):
+		return "Lightroom refused collection " + refused.name
+	case errors.Is(err, lightroom.ErrNotConnected):
+		return "Lightroom not connected: connect it in the console"
+	}
+	if class, _ := lightroom.Classify(err); class == lightroom.ClassAuth {
+		return "Lightroom sign-in expired: connect it again in the console"
+	}
+	return ""
 }
 
 type spoolError struct{ error }
@@ -201,6 +342,9 @@ func classify(err error) (class string, retryable bool) {
 	var se spoolError
 	if errors.As(err, &se) {
 		return classSpool, true
+	}
+	if errors.Is(err, errNoTarget) {
+		return lightroom.ClassNoTarget, true
 	}
 	return lightroom.Classify(err)
 }

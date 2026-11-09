@@ -7,8 +7,10 @@ to Lightroom exactly once. A live console shows every photo moving through the
 pipeline, explains each rating in words, and links each photo to its one
 end-to-end OpenTelemetry trace in Dash0.
 
-Built for a hackathon. The Lightroom target is a mock with fault injection
-(`lightroom-mock`); no real Lightroom account is used.
+Built for a hackathon. By default the Lightroom target is a mock with fault
+injection (`lightroom-mock`); with `LIGHTROOM_MODE=adobe` the publisher puts
+photos into a collection of a real Adobe Lightroom account, connected from the
+console ([Adobe Lightroom](docs/architecture.md#adobe-lightroom)).
 
 - [Prerequisites](#prerequisites)
 - [Quick start](#quick-start)
@@ -53,8 +55,17 @@ Fill in `.env`:
 | `DEMO_CONTROLS` | no | `1` (default) shows the console's demo fault panel; `0` hides it |
 | `DASH0_API_URL`, `DASH0_API_TOKEN` | no | Only for `observability/apply-dash0.sh`, which applies the dashboard and check rules (see below) |
 
-`LIGHTROOM_MODE` and the `ADOBE_*` lines in `.env.example` are not read by any
-service yet; the publisher always talks to `lightroom-mock`.
+Adobe Lightroom (optional; compose stays on the mock). Set these on the
+gateway and, for `adobe` mode, on the publisher:
+
+| Variable | Service | Meaning |
+|---|---|---|
+| `LIGHTROOM_MODE` | publisher, gateway | `mock` (default) or `adobe` |
+| `ADOBE_CLIENT_ID` | publisher, gateway | Adobe Developer Console API key; sent as `X-API-Key` |
+| `ADOBE_CLIENT_SECRET` | gateway | client secret for the IMS code exchange and refresh |
+| `ADOBE_REDIRECT_URI` | gateway | default `https://localhost:8443/auth/lightroom/callback`; must match the console's redirect URI pattern |
+| `KEEPER_TOKEN_KEY` | publisher, gateway | 32 random bytes, base64 (`openssl rand -base64 32`); seals the tokens at rest |
+| `LIGHTROOM_TIMEOUT`, `LIGHTROOM_UPLOAD_TIMEOUT` | publisher | per call and per upload; `adobe` defaults 15 s and 5 min |
 
 Start everything:
 

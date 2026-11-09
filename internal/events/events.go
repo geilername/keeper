@@ -120,9 +120,13 @@ type PhotoPublished struct {
 }
 
 type PhotoFailed struct {
-	V          int        `json:"v"`
-	SHA256     string     `json:"sha256"`
-	Attempt    int        `json:"attempt"`
-	ErrorClass string     `json:"error_class"` // e.g. "lightroom_5xx", "timeout"
-	RetryAt    *time.Time `json:"retry_at,omitempty"`
+	V          int    `json:"v"`
+	SHA256     string `json:"sha256"`
+	Attempt    int    `json:"attempt"`
+	ErrorClass string `json:"error_class"` // e.g. "lightroom_5xx", "timeout"
+	// Error says in words what the console should show instead of the
+	// class, when there is something to say ("Lightroom refused collection
+	// Talks"). Optional; readers fall back to error_class.
+	Error   string     `json:"error,omitempty"`
+	RetryAt *time.Time `json:"retry_at,omitempty"`
 }

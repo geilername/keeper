@@ -289,6 +289,9 @@ Sheet paper, ink rule on the left, sticky header with the file name in mono and 
 ### Journey bar
 A 14px bar of segments drawn to real seconds per stage, 2px apart: solid ink for completed stages, ground with diagonal hatch for the stage in progress, cross-hatch for a conflict in progress. A list beneath gives each stage with its duration in mono.
 
+### Lightroom line
+A ruled strip under the stage ramp (hairlines above and below) that says where published photos go: the label "Lightroom", then a state sentence led by a state word in condensed caps (Connected, No collection, Not connected, Sign-in expired, Mock), the collection as a native select, and "Connect Lightroom" in the trace action's ink bar with its Δ cell. The select is square, ground-filled, outlined with an inset 1px ink line (2px on hover, hairline when disabled) with the chevron from the icon set. A state that holds photos back (no collection, expired, not connected) takes the status line's cross-hatch mark before its word and says what waits in words. At 860px and below the select and action drop under the sentence; at 640px and below everything stacks and the select is full width.
+
 ### Status line
 The top bar's right-hand sentence: a status word in condensed caps, then plain words and counts. On a conflict the word becomes the alert headline, preceded by a cross-hatch mark, and the sentence says what is happening and what happens next.
 

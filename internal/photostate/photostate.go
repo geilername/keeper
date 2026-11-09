@@ -128,11 +128,11 @@ func Apply(p Photo, ev any, at time.Time) (out Photo, firstPublished bool) {
 		switch {
 		case e.Attempt > p.Attempts:
 			p.Attempts = e.Attempt
-			p.LastError = e.ErrorClass
+			p.LastError = failureText(e)
 			p.FailedAt = ptr(at)
 			p.RetryAt = e.RetryAt
 		case e.Attempt == p.Attempts:
-			p.LastError = e.ErrorClass
+			p.LastError = failureText(e)
 			p.FailedAt = earliestPtr(p.FailedAt, at)
 		}
 		// retry_at set: the publisher will try again. Absent: it gave up.
@@ -202,6 +202,15 @@ func Decode(subject string, raw []byte) (string, any, error) {
 		return "", nil, fmt.Errorf("%s: invalid sha256 %q", subject, *sha)
 	}
 	return *sha, ev, nil
+}
+
+// failureText is what the read model shows for a failed attempt: the
+// publisher's words when it sent some, else the error class.
+func failureText(e *events.PhotoFailed) string {
+	if e.Error != "" {
+		return e.Error
+	}
+	return e.ErrorClass
 }
 
 // ValidSHA accepts exactly 64 lowercase hex characters. Everything that turns

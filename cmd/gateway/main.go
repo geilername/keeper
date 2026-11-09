@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/geilername/keeper/internal/lrlink"
 	"github.com/geilername/keeper/internal/natsx"
 	"github.com/geilername/keeper/internal/search"
 	"github.com/geilername/keeper/internal/telemetry"
@@ -29,6 +31,7 @@ type config struct {
 	traceURL    string // Dash0 trace deep link template with {trace_id}
 	demoAdmin   string // lightroom-mock admin base URL; empty = demo controls off
 	esURL       string // Elasticsearch for /api/search; empty disables it
+	lightroom   lrConfig
 }
 
 func loadConfig() config {
@@ -39,6 +42,7 @@ func loadConfig() config {
 		traceURL:    os.Getenv("DASH0_TRACE_URL"),
 		demoAdmin:   demoAdminURL(),
 		esURL:       os.Getenv("ELASTICSEARCH_URL"),
+		lightroom:   loadLRConfig(),
 	}
 }
 
@@ -109,6 +113,23 @@ func run(ctx context.Context, cfg config) error {
 	if cfg.esURL != "" {
 		a.search = search.New(cfg.esURL, 5*time.Second)
 	}
+	a.lrMode = cfg.lightroom.mode
+	if cfg.lightroom.configured() {
+		kv, err := lrlink.OpenBucket(ctx, js)
+		if err != nil {
+			return fmt.Errorf("open %s bucket: %w", lrlink.Bucket, err)
+		}
+		sealer, err := lrlink.NewSealer(cfg.lightroom.tokenKey)
+		if err != nil {
+			return err // client ID and secret without a key would store tokens in the clear
+		}
+		a.lr, err = newLightroomAuth(cfg.lightroom, store, lrlink.Writer{KV: kv, Sealer: sealer})
+		if err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "adobe lightroom configured", "redirect_uri", cfg.lightroom.redirectURI,
+			"lightroom_mode", cfg.lightroom.mode)
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.httpAddr,
@@ -125,6 +146,9 @@ func run(ctx context.Context, cfg config) error {
 
 	consumerDone := make(chan error, 1)
 	go func() { consumerDone <- pr.run(ctx, js) }()
+	if a.lr != nil {
+		go a.lr.maintain(ctx, time.Minute)
+	}
 
 	httpDone := make(chan error, 1)
 	go func() {

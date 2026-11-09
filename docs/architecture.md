@@ -23,7 +23,9 @@ diagram and the trace model summary are in the [README](../README.md#architectur
    open, then publishes `burst.decided` and one `photo.decided` per member,
    and acks.
 6. `publisher` creates the Lightroom asset, uploads the original and sets the
-   rating, then publishes `photo.published`. A failed attempt publishes
+   rating (with `LIGHTROOM_MODE=adobe`: and adds it to the collection picked
+   in the console; see [Adobe Lightroom](#adobe-lightroom)), then publishes
+   `photo.published`. A failed attempt publishes
    `photo.failed` and naks the message for redelivery.
 7. `gateway` consumes every subject into its Postgres read model and pushes
    each change to the console over SSE.
@@ -73,7 +75,7 @@ photo.scored    { v, sha256, captured_at, features, timings_ms }
 burst.decided   { v, burst_id, members[sha256], best, reason, close_reason }
 photo.decided   { v, sha256, burst_id, bucket, rating, reasons[] }
 photo.published { v, sha256, lightroom_asset_id, attempt }
-photo.failed    { v, sha256, attempt, error_class, retry_at? }
+photo.failed    { v, sha256, attempt, error_class, error?, retry_at? }
 ```
 
 `features` in `photo.scored`:
@@ -95,6 +97,8 @@ times (`decode`, `faces`, `sharpness`, `exposure`, `hash`).
 | `bucket` / `rating` | `best` / 5, `keeper` / 3, `reject` / 1 |
 | `close_reason` | `idle`, `max_wait` |
 | `retry_at` | set while the publisher will retry; absent when the failure is final |
+| `error` | optional words for the console ("Lightroom refused collection Talks"); the read model shows it instead of `error_class` |
+| `error_class` | `lightroom_5xx`, `lightroom_429`, `timeout`, `unreachable`, `conflict`, `lightroom_4xx`, `spool_unreadable`; Adobe only: `lightroom_auth` (not connected or token expired, retried), `lightroom_catalog` (catalogue ID changed, retried), `no_target` (no collection chosen, retried), `album_refused` (permanent) |
 
 ## Bursts and decisions
 
@@ -177,6 +181,7 @@ cardinality: no sha256, path or file name.
 | `keeper.photo.e2e.duration` | histogram (s) | — | gateway (capture time to `photo.published`) |
 | `keeper.consumer.pending` | observable gauge | `consumer` | gateway (JetStream consumer info) |
 | `keeper.lightroom.requests` | counter | `route`, `result` | lightroom-mock |
+| `keeper.lightroom.album.adds` | counter | `result`: `ok`, `no_target`, `refused`, `error` | publisher (Adobe mode) |
 
 ## HTTP endpoints
 
@@ -189,6 +194,10 @@ cardinality: no sha256, path or file name.
 | gateway | `GET /api/search?q=&bucket=&stage=&burst=&limit=n` | photo search in Elasticsearch: `{total, photos}`; `q` in `query_string` syntax (`blur`, `"eyes closed"`, `features.sharpness.score:>0.5`, `attempts:>2`) |
 | gateway | `GET /api/events` | SSE, `event: photo` per change |
 | gateway | `GET /thumbs/{sha}.jpg` | thumbnail |
+| gateway | `GET /auth/lightroom/login`, `GET /auth/lightroom/callback` | Adobe IMS sign-in (authorization code; `state` checked against a cookie) |
+| gateway | `GET /api/lightroom/status` | `{state: not_configured\|not_connected\|connected\|expired, mode, account, expires_at, target}` |
+| gateway | `GET /api/lightroom/collections` | the user's collections `{id, name, path}`, path through collection sets; 409 when not connected |
+| gateway | `PUT /api/lightroom/target` | `{"album_id": …}` (JSON only), must be one of the collections |
 | gateway | `GET/POST /api/demo/faults`, `GET /api/demo/stats` | console fault panel, forwarded to lightroom-mock's `/admin/faults` and `/admin/stats`; only with `DEMO_CONTROLS=1` |
 | camera-sim | `POST /shoot?set=<name>[&dup=1]`, `GET /sets` | demo driver |
 | lightroom-mock | `GET/POST /admin/faults` | fault config: `error_rate` (0..1), `status` (default 503), `latency_ms`; a POST replaces the whole config |
@@ -199,3 +208,42 @@ cardinality: no sha256, path or file name.
 
 The Lightroom asset ID is the first 32 hex characters of the sha256, so a
 replayed create finds the existing asset instead of making a second one.
+
+## Adobe Lightroom
+
+`LIGHTROOM_MODE=mock` (the default, and what compose runs) sends photos to
+`lightroom-mock`. `LIGHTROOM_MODE=adobe` sends them to the Lightroom Partner
+API at `https://lr.adobe.io` (`internal/lightroom.Adobe`), into one existing
+collection the user picks in the console.
+
+**Sign-in.** The gateway runs the Adobe IMS authorization-code flow
+(`/auth/lightroom/login` → IMS → `/auth/lightroom/callback`) with the scopes
+`openid,AdobeID,lr_partner_apis,offline_access`. The callback checks `state`
+against a one-use, HttpOnly cookie, exchanges the code and stores access and
+refresh token sealed with AES-256-GCM (key `KEEPER_TOKEN_KEY`) in
+`gateway.lightroom_auth`. Once a minute it refreshes the access token when it
+expires within 10 minutes. The OAuth routes are not traced, so the code never
+lands in a span.
+
+**Gateway → publisher.** The JetStream key-value bucket `keeper-lightroom`
+(`internal/lrlink`, history 1, file storage) holds two keys: `target`, the
+chosen collection as JSON, and `token`, the current access token sealed with
+the same key. The gateway writes both; the publisher watches the bucket, so a
+new collection or token is used on the next attempt without a restart. The
+refresh token never leaves the gateway.
+
+**Publishing.** Before anything goes into the catalogue the publisher needs a
+target; without one the photo waits (`no_target`, retried every 30 s). Then:
+create the asset (a replay gets 403 "already exists" and reads the asset
+back), upload the original (`image/jpeg`, or `application/octet-stream` for
+raws as the spec requires, with its own `LIGHTROOM_UPLOAD_TIMEOUT`, default
+5 min, while the handler marks the message in progress every 10 s), then add
+it to the collection. Adding an asset that is already in the collection counts
+as done: every asset Adobe did not add is looked up in the collection. A 403
+for the collection itself ends the photo as `album_refused` with the words
+"Lightroom refused collection <name>".
+
+**Ratings.** The Partner API cannot change an asset after it is created
+(there is no PATCH and no rating on create), so in Adobe mode the rating stays
+in Keeper; the `publish` span records `keeper.lightroom.rating_written=false`.
+

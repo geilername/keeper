@@ -32,6 +32,26 @@
   <p class="key" aria-hidden="true"><span><i class="sw wait"></i>photos waiting, denser = more</span><span><i class="sw conflict"></i>retrying or not published</span></p>
 </section>
 
+<!-- Where published photos go: the Adobe Lightroom connection and the
+     collection photos are added to. lightroom.js drives it. -->
+<section class="lr" id="lr" aria-labelledby="lr-title" hidden>
+  <h2 class="legend" id="lr-title">Lightroom</h2>
+  <div class="lr-says">
+    <p class="lr-state" id="lr-state" role="status" aria-live="polite">Reading the connection…</p>
+    <p class="lr-note" id="lr-note" aria-live="polite" hidden></p>
+  </div>
+  <div class="lr-pick" id="lr-pick" hidden>
+    <label class="legend" for="lr-target">Collection</label>
+    <span class="select">
+      <select id="lr-target"></select>
+      <svg width="12" height="12" aria-hidden="true"><use href="#i-chev"/></svg>
+    </span>
+  </div>
+  <a class="act lr-connect" id="lr-connect" href="/auth/lightroom/login" hidden>
+    <span>Connect Lightroom</span><span class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#i-out"/></svg></span>
+  </a>
+</section>
+
 <!-- Demo controls: shown only when the gateway runs with DEMO_CONTROLS=1.
      A loose leaf on the record, not part of Keeper; demo.js drives it. -->
 <details class="demo" id="demo" hidden open>

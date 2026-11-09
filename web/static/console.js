@@ -3,6 +3,7 @@
 // Rendering is keyed by sha256 and burst, so prints move instead of reloading.
 
 import { startDemo } from './demo.js';
+import { startLightroom } from './lightroom.js';
 
 const BURST_GAP_MS = 2000;       // culler BURST_GAP, for bursts still forming
 const WINDOW_IDLE_MS = 20000;    // culler BURST_IDLE
@@ -524,6 +525,9 @@ const demoRender = startDemo(() => {
     onTheWay: list.filter(p => ['decided', 'publishing', 'retrying'].includes(p.stage)).length,
   };
 });
+
+// Where published photos go: Adobe connection and target collection.
+startLightroom();
 
 setInterval(schedule, 1000); // countdowns and "ago" lines
 connect();
