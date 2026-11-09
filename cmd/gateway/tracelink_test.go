@@ -89,3 +89,12 @@ func TestTraceLinkPlaceholders(t *testing.T) {
 		t.Errorf("unescaped '=' in %s", link)
 	}
 }
+
+// One list of 500 photos builds 500 links; this is the per-link cost.
+func BenchmarkDash0ViewLink(b *testing.B) {
+	l := traceLinker{tmpl: "https://app.dash0.com/traces/explorer?org=o&s={dash0_state}", dataset: "keeper-demo"}
+	b.ReportAllocs()
+	for b.Loop() {
+		l.link(linkSHA)
+	}
+}

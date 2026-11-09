@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 // traceLinker builds the Dash0 deep link for a photo from DASH0_TRACE_URL.
@@ -44,6 +45,11 @@ func (l traceLinker) link(sha string) (traceID, link string) {
 	}
 	return traceID, link
 }
+
+// zlibWriters reuses compressors: one zlib writer holds about 1 MB of flate
+// state, and a link is built for every photo in every list, search result and
+// live update.
+var zlibWriters = sync.Pool{New: func() any { return zlib.NewWriter(nil) }}
 
 // dash0ViewState encodes the view Dash0's trace explorer keeps in its "s"
 // query parameter: JSON, zlib-compressed, base64url with padding. The shape
@@ -83,7 +89,9 @@ func dash0ViewState(dataset, traceID, spanID string) (string, error) {
 		return "", err
 	}
 	var buf bytes.Buffer
-	zw := zlib.NewWriter(&buf)
+	zw := zlibWriters.Get().(*zlib.Writer)
+	defer zlibWriters.Put(zw)
+	zw.Reset(&buf)
 	if _, err := zw.Write(raw); err != nil {
 		return "", err
 	}
