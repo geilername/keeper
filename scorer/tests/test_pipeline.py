@@ -2,6 +2,8 @@
 
 import json
 
+import numpy as np
+
 import cv2
 import pytest
 
@@ -80,3 +82,19 @@ def test_parse_ingested_rejects_unusable_events(data, tmp_path):
 
 def test_nak_delay_backs_off_and_caps():
     assert [service.nak_delay(n) for n in range(1, 7)] == [2, 4, 8, 16, 30, 30]
+
+
+def test_faces_run_on_the_large_image(tmp_path, detector, monkeypatch):
+    """Face detection sees >= 2500 px on the long edge; the other features stay at 1024."""
+    big = np.full((3000, 4500), 128, dtype=np.uint8)
+    cv2.putText(big, "keeper", (500, 1500), cv2.FONT_HERSHEY_SIMPLEX, 20, 255, 40)
+    path = tmp_path / "big.jpg"
+    cv2.imwrite(str(path), big)
+
+    seen = {}
+    real = detector.detect
+    monkeypatch.setattr(type(detector), "detect", lambda self, g: seen.setdefault("shape", g.shape) and real(g))
+    feats, _ = pipeline.analyse(path, detector)
+
+    assert max(seen["shape"]) == features.FACE_LONG_EDGE >= 2500
+    assert set(feats) == {"sharpness", "exposure", "eyes", "dhash"}

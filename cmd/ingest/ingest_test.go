@@ -1,6 +1,12 @@
 package main
 
 import (
+	"image"
+	"image/color"
+	"os"
+	"path/filepath"
+
+	"github.com/gen2brain/webp"
 	"testing"
 	"time"
 )
@@ -32,5 +38,38 @@ func TestSubSec(t *testing.T) {
 		if got := subSec(in); got != want {
 			t.Errorf("subSec(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestThumbnailIsWebP(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "preview.jpg")
+	img := image.NewRGBA(image.Rect(0, 0, 2560, 1707))
+	for y := 0; y < 1707; y += 7 {
+		for x := 0; x < 2560; x++ {
+			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 120, 255})
+		}
+	}
+	if err := writeJPEG(src, img, 90); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "thumbs", "x.webp")
+	if err := makeThumbnail(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	cfg, err := webp.DecodeConfig(f)
+	if err != nil {
+		t.Fatalf("thumbnail is not WebP: %v", err)
+	}
+	if cfg.Width != thumbEdge || cfg.Height != 1707*thumbEdge/2560 {
+		t.Errorf("thumbnail %dx%d, want long edge %d", cfg.Width, cfg.Height, thumbEdge)
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o644 {
+		t.Errorf("mode %v, want 0644", fi.Mode().Perm())
 	}
 }

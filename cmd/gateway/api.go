@@ -20,15 +20,21 @@ import (
 )
 
 // thumbSHA extracts the sha from a "/thumbs/{name}" segment of the form
-// "<sha>.jpg". Anything else (other extensions, "..", slashes, upper case)
-// is rejected.
+// "<sha>.webp" (or "<sha>.jpg" from before thumbnails were WebP). Anything
+// else (other extensions, "..", slashes, upper case) is rejected.
 func thumbSHA(name string) (string, bool) {
-	sha, ok := strings.CutSuffix(name, ".jpg")
+	sha, ok := strings.CutSuffix(name, ".webp")
+	if !ok {
+		sha, ok = strings.CutSuffix(name, ".jpg")
+	}
 	if !ok || !photostate.ValidSHA(sha) {
 		return "", false
 	}
 	return sha, true
 }
+
+// thumbURL is the console's thumbnail link for a photo.
+func thumbURL(sha string) string { return "/thumbs/" + sha + ".webp" }
 
 // traceLinker builds the Dash0 deep link for a photo. The photo trace ID is
 // the first 16 bytes of its sha256 (ADR-6), i.e. the first 32 hex chars.
@@ -78,7 +84,7 @@ func (l traceLinker) snapshot(p Photo) Snapshot {
 		Captured: p.CapturedAt, SeenAt: p.SeenAt, IngestedAt: p.IngestedAt, ScoredAt: p.ScoredAt,
 		DecidedAt: p.DecidedAt, PublishedAt: p.PublishedAt, FailedAt: p.FailedAt, RetryAt: p.RetryAt,
 		UpdatedAt: p.UpdatedAt,
-		Thumb:     "/thumbs/" + p.SHA256 + ".jpg", TraceID: tid, TraceURL: url,
+		Thumb:     thumbURL(p.SHA256), TraceID: tid, TraceURL: url,
 	}
 }
 
@@ -186,7 +192,7 @@ func (a *api) getPhoto(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	d := PhotoDetail{Photo: p, Thumb: "/thumbs/" + sha + ".jpg", Siblings: []Snapshot{}}
+	d := PhotoDetail{Photo: p, Thumb: thumbURL(sha), Siblings: []Snapshot{}}
 	d.TraceID, d.TraceURL = a.links.link(sha)
 	if p.BurstID != "" {
 		if b, err := a.store.GetBurst(r.Context(), p.BurstID); err == nil {
@@ -231,7 +237,8 @@ func (a *api) getBurst(w http.ResponseWriter, r *http.Request) {
 	}{b, photos})
 }
 
-// thumb serves /spool/thumbs/<sha>.jpg. Thumbnails are content-addressed and
+// thumb serves a photo's thumbnail: the WebP one, or for photos ingested
+// before thumbnails were WebP, the JPEG one. Thumbnails are content-addressed and
 // never change, so browsers may cache them forever.
 func (a *api) thumb(w http.ResponseWriter, r *http.Request) {
 	sha, ok := thumbSHA(r.PathValue("name"))
@@ -239,7 +246,12 @@ func (a *api) thumb(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	contentType := "image/webp"
 	f, err := os.Open(spool.ThumbPath(sha))
+	if errors.Is(err, os.ErrNotExist) {
+		contentType = "image/jpeg"
+		f, err = os.Open(spool.LegacyThumbPath(sha))
+	}
 	if err != nil {
 		// Not there yet (ingest still writing) or never: let the browser
 		// retry later instead of caching the 404.
@@ -254,7 +266,7 @@ func (a *api) thumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := w.Header()
-	h.Set("Content-Type", "image/jpeg")
+	h.Set("Content-Type", contentType)
 	h.Set("Cache-Control", "public, max-age=31536000, immutable")
 	h.Set("ETag", `"`+sha+`"`)
 	http.ServeContent(w, r, "", st.ModTime(), f)

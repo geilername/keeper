@@ -70,7 +70,7 @@ func TestSearchEndpoint(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	p := res.Photos[0]
-	if p.SHA256 != testSHA || p.Stage != "published" || p.Thumb != "/thumbs/"+testSHA+".jpg" ||
+	if p.SHA256 != testSHA || p.Stage != "published" || p.Thumb != "/thumbs/"+testSHA+".webp" ||
 		p.TraceURL != "https://dash0/"+testSHA[:32] {
 		t.Errorf("snapshot = %+v", p)
 	}
