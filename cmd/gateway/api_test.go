@@ -205,3 +205,39 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// WebP thumbnails are served as WebP; photos from before WebP keep their JPEG,
+// also when the console asks for <sha>.webp.
+func TestThumbWebPAndLegacyJPEG(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SPOOL_DIR", dir)
+	webpSHA := strings.Repeat("b", 64)
+	if err := os.MkdirAll(filepath.Join(dir, "thumbs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{webpSHA + ".webp": "RIFFwebp", testSHA + ".jpg": "jpeg"} {
+		if err := os.WriteFile(filepath.Join(dir, "thumbs", name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer((&api{bc: NewBroadcaster()}).routes())
+	defer srv.Close()
+
+	for path, want := range map[string]string{
+		"/thumbs/" + webpSHA + ".webp": "image/webp",
+		"/thumbs/" + testSHA + ".webp": "image/jpeg", // legacy fallback
+		"/thumbs/" + testSHA + ".jpg":  "image/jpeg",
+	} {
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != want {
+			t.Errorf("GET %s = %d %q, want 200 %q", path, res.StatusCode, res.Header.Get("Content-Type"), want)
+		}
+	}
+	if got := thumbURL(webpSHA); got != "/thumbs/"+webpSHA+".webp" {
+		t.Errorf("thumbURL = %s", got)
+	}
+}

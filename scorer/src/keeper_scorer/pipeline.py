@@ -39,17 +39,21 @@ def analyse(path: Path, detector: features.EyeDetector) -> tuple[dict[str, Any],
 
     with _stage("decode", timings) as span:
         data = path.read_bytes()
-        gray = features.decode(data)
+        # Faces on the large image, everything else on the working image.
+        large = features.decode(data, features.FACE_LONG_EDGE)
+        gray = features.downscale(large)
         span.set_attributes(
             {
                 "keeper.image.size_bytes": len(data),
+                "keeper.image.face_width": int(large.shape[1]),
+                "keeper.image.face_height": int(large.shape[0]),
                 "keeper.image.work_width": int(gray.shape[1]),
                 "keeper.image.work_height": int(gray.shape[0]),
             }
         )
 
     with _stage("faces", timings) as span:
-        eyes = detector.detect(gray)
+        eyes = detector.detect(large)
         span.set_attributes({"keeper.eyes": eyes["state"], "keeper.faces": eyes["faces"]})
 
     with _stage("sharpness", timings) as span:

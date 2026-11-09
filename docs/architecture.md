@@ -136,6 +136,12 @@ other frames of its own burst:
 Each decision carries its reasons in words, and the `burst.decide` span
 records `keeper.policy.profile`.
 
+The scorer detects faces and eyes on the preview at a long edge of 2560 px,
+so faces at conference distance and the eyes inside them are large enough for
+the Haar cascades. Sharpness, exposure and the similarity hash run on a
+1024 px copy: their scores depend on resolution and the policy thresholds were
+set at that size.
+
 ## Traces
 
 Trace and span IDs of a photo are derived in
@@ -194,7 +200,7 @@ cardinality: no sha256, path or file name.
 | gateway | `GET /api/bursts/{id}` | one burst |
 | gateway | `GET /api/search?q=&bucket=&stage=&burst=&limit=n` | photo search in Elasticsearch: `{total, photos}`; `q` in `query_string` syntax (`blur`, `"eyes closed"`, `features.sharpness.score:>0.5`, `attempts:>2`) |
 | gateway | `GET /api/events` | SSE, `event: photo` per change |
-| gateway | `GET /thumbs/{sha}.jpg` | thumbnail |
+| gateway | `GET /thumbs/{sha}.webp` | thumbnail (WebP; photos from before WebP fall back to their JPEG) |
 | gateway | `GET /auth/lightroom/login`, `GET /auth/lightroom/callback` | Adobe IMS sign-in (authorization code; `state` checked against a cookie) |
 | gateway | `GET /api/lightroom/status` | `{state: not_configured\|not_connected\|connected\|expired, mode, account, expires_at, target}` |
 | gateway | `GET /api/lightroom/collections` | the user's collections `{id, name, path}`, path through collection sets; 409 when not connected |

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gen2brain/webp"
 	"github.com/rwcarlsen/goexif/exif"
 	"golang.org/x/image/draw"
 
@@ -81,7 +82,7 @@ func subSec(s string) time.Duration {
 }
 
 const (
-	previewEdge = 2048 // the scorer works at 1024; 2048 keeps the record sheet sharp
+	previewEdge = 2560 // face detection runs at 2560 (scorer FACE_LONG_EDGE); sharpness etc. at 1024
 	thumbEdge   = 480
 )
 
@@ -126,7 +127,9 @@ func decodeForPreview(original string, t media.Type) (image.Image, error) {
 	return jpeg.Decode(r)
 }
 
-// makeThumbnail scales the (already upright) preview for the console.
+// makeThumbnail scales the (already upright) preview for the console and
+// writes it as WebP: about a third smaller than JPEG at the same look, and it
+// is what every browser and phone downloads.
 func makeThumbnail(preview, dst string) error {
 	f, err := os.Open(preview)
 	if err != nil {
@@ -137,7 +140,9 @@ func makeThumbnail(preview, dst string) error {
 	if err != nil {
 		return err
 	}
-	return writeJPEG(dst, scaleTo(img, thumbEdge), 82)
+	return writeAtomic(dst, func(w io.Writer) error {
+		return webp.Encode(w, scaleTo(img, thumbEdge), webp.Options{Quality: 80, Method: 4})
+	})
 }
 
 // scaleTo shrinks img so its long edge is at most edge; smaller images pass.
@@ -159,6 +164,14 @@ func scaleTo(img image.Image, edge int) image.Image {
 
 // writeJPEG writes atomically (temp file + rename) with mode 0644.
 func writeJPEG(dst string, img image.Image, quality int) error {
+	return writeAtomic(dst, func(w io.Writer) error {
+		return jpeg.Encode(w, img, &jpeg.Options{Quality: quality})
+	})
+}
+
+// writeAtomic writes through encode to a temp file, then renames it into
+// place with mode 0644, so readers never see a half-written image.
+func writeAtomic(dst string, encode func(io.Writer) error) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -167,7 +180,7 @@ func writeJPEG(dst string, img image.Image, quality int) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if err := jpeg.Encode(tmp, img, &jpeg.Options{Quality: quality}); err != nil {
+	if err := encode(tmp); err != nil {
 		tmp.Close()
 		return err
 	}

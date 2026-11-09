@@ -20,7 +20,14 @@ CLUSTER=${KIND_CLUSTER:-kind}
 NS=${NAMESPACE:-keeper}
 CTX="kind-$CLUSTER"
 LAN_IP=${LAN_IP:-$(ipconfig getifaddr en0 2>/dev/null || true)}
-TAG="dev-$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- cmd internal scorer web go.mod go.sum Dockerfile || echo -dirty)"
+# Image tag: the commit, plus a hash of uncommitted changes (tracked and new
+# files) when there are any. Two different working trees on the same commit
+# then never share a tag, so Helm sees a change and the pods restart.
+SRC=(cmd internal scorer web go.mod go.sum Dockerfile)
+TAG="dev-$(git rev-parse --short HEAD)"
+if [[ -n "$(git status --porcelain -- "${SRC[@]}")" ]]; then
+  TAG="$TAG-dirty-$( { git diff HEAD -- "${SRC[@]}"; git ls-files --others --exclude-standard -z -- "${SRC[@]}" | xargs -0 cat 2>/dev/null; } | openssl dgst -sha256 -r | cut -c1-8)"
+fi
 APPS=(ingest culler publisher gateway indexer lightroom-mock)
 
 log() { printf '\033[1m▸ %s\033[0m\n' "$*"; }
