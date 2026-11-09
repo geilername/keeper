@@ -55,6 +55,10 @@ curl --ssl-reqd -k --ftp-pasv -T test-pics/DSC07625.ARW -u camera:"$CAMERA_FTP_P
   same number on host, node and pod, because SFTPGo advertises them to the
   camera; `deploy/kind/cluster.yaml` and `values.sftpgo.passivePorts` must
   agree.
+- `kind-up.sh` passes a hash of both secrets' contents to the chart; the pods
+  that read them (ingest, gateway, publisher, SFTPGo, collector) carry it as
+  an annotation, so changed `.env` values or `RENEW_TLS=1` restart exactly
+  those pods. The hash never contains the secrets themselves.
 - Secrets are referenced, never templated: `keeper-secrets` (Dash0, FTP and
   Postgres passwords) and `keeper-tls` (certificate) are created by
   `kind-up.sh`.

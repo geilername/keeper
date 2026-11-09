@@ -17,6 +17,10 @@ image:
 secrets:
   name: keeper-secrets
   tlsName: keeper-tls
+  # A hash of both secrets' contents (kind-up.sh sets it). It goes on the
+  # pods that read them, so a changed secret or certificate rolls those pods;
+  # env vars from secrets and the TLS certificate are only read at start.
+  checksum: ""
 
 # Pods run as uid/gid 1000 and share the spool through fsGroup.
 podSecurityContext:
