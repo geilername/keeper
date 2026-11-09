@@ -1,6 +1,7 @@
 // Command gateway is Keeper's read side. It consumes every event on the
 // PHOTOS stream into a Postgres read model (schema "gateway") and serves it
-// to the browser: REST, a live SSE feed and the embedded console.
+// to the browser: REST, a live SSE feed and the embedded console. Search
+// (/api/search) queries the Elasticsearch index cmd/indexer maintains.
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/geilername/keeper/internal/natsx"
+	"github.com/geilername/keeper/internal/search"
 	"github.com/geilername/keeper/internal/telemetry"
 	"github.com/geilername/keeper/web"
 )
@@ -26,6 +28,7 @@ type config struct {
 	httpAddr    string
 	traceURL    string // Dash0 trace deep link template with {trace_id}
 	demoAdmin   string // lightroom-mock admin base URL; empty = demo controls off
+	esURL       string // Elasticsearch for /api/search; empty disables it
 }
 
 func loadConfig() config {
@@ -35,6 +38,7 @@ func loadConfig() config {
 		httpAddr:    env("HTTP_ADDR", ":8080"),
 		traceURL:    os.Getenv("DASH0_TRACE_URL"),
 		demoAdmin:   demoAdminURL(),
+		esURL:       os.Getenv("ELASTICSEARCH_URL"),
 	}
 }
 
@@ -101,6 +105,9 @@ func run(ctx context.Context, cfg config) error {
 	if cfg.demoAdmin != "" {
 		a.demo = newDemoProxy(cfg.demoAdmin)
 		slog.InfoContext(ctx, "demo controls enabled", "lightroom_admin", cfg.demoAdmin)
+	}
+	if cfg.esURL != "" {
+		a.search = search.New(cfg.esURL, 5*time.Second)
 	}
 
 	srv := &http.Server{

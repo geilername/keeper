@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/geilername/keeper/internal/events"
+	"github.com/geilername/keeper/internal/photostate"
 )
 
 // schema is the whole read model. It is created at startup; there is no
@@ -109,7 +110,7 @@ func (s *Store) ApplyPhotoEvent(ctx context.Context, sha string, ev any, at time
 
 	if _, err = tx.Exec(ctx,
 		`INSERT INTO gateway.photos (sha256, seen_at) VALUES ($1, $2) ON CONFLICT (sha256) DO NOTHING`,
-		sha, normTime(at)); err != nil {
+		sha, photostate.NormTime(at)); err != nil {
 		return p, false, false, err
 	}
 	before, err := scanPhoto(tx.QueryRow(ctx,
@@ -118,7 +119,7 @@ func (s *Store) ApplyPhotoEvent(ctx context.Context, sha string, ev any, at time
 		return p, false, false, err
 	}
 
-	after, firstPublished := apply(before, ev, at)
+	after, firstPublished := photostate.Apply(before, ev, at)
 	if reflect.DeepEqual(before, after) {
 		return before, false, false, tx.Commit(ctx)
 	}
@@ -156,7 +157,7 @@ func (s *Store) UpsertBurst(ctx context.Context, b *events.BurstDecided, at time
 			close_reason = excluded.close_reason,
 			decided_at = LEAST(gateway.bursts.decided_at, excluded.decided_at),
 			updated_at = now()`,
-		b.BurstID, b.Members, b.Best, b.Reason, b.CloseReason, normTime(at))
+		b.BurstID, b.Members, b.Best, b.Reason, b.CloseReason, photostate.NormTime(at))
 	return err
 }
 
@@ -239,12 +240,13 @@ func scanPhoto(row pgx.Row) (Photo, error) {
 	if err != nil {
 		return p, err
 	}
-	// pgx returns times in the local zone; normalise so apply's output
+	// pgx returns times in the local zone; normalise so Apply's output
 	// compares equal to what was read.
 	for _, t := range []**time.Time{&p.CapturedAt, &p.IngestedAt, &p.ScoredAt,
 		&p.DecidedAt, &p.PublishedAt, &p.FailedAt} {
 		if *t != nil {
-			*t = ptr((**t).UTC())
+			u := (**t).UTC()
+			*t = &u
 		}
 	}
 	p.SeenAt = p.SeenAt.UTC()

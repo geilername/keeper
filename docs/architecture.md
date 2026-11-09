@@ -25,6 +25,9 @@ diagram and the trace model summary are in the [README](../README.md#architectur
    `photo.failed` and naks the message for redelivery.
 7. `gateway` consumes every subject into its Postgres read model and pushes
    each change to the console over SSE.
+8. `indexer` folds every `photo.*` event, with the same code as the gateway
+   (`internal/photostate`), into one Elasticsearch document per photo, which
+   the gateway's `/api/search` queries.
 
 ## Stream and consumers
 
@@ -38,6 +41,13 @@ an existing stream is never changed.
 | `culler` | culler | `photo.scored` | 30 s, `InProgress` every 10 s while held | 8 | 2, 5, 15, 30 s |
 | `publisher` | publisher | `photo.decided` | 30 s | unlimited (`-1`) | 2, 5, 15 s, then 30 s |
 | `gateway` | gateway | none (all subjects) | 30 s | unlimited (`-1`) | 2, 5, 15 s, then 30 s |
+| `indexer` | indexer | `photo.>` | 30 s | unlimited (`-1`) | 2, 5, 15 s, then 30 s |
+
+The `indexer` writes each document with a read-modify-write guarded by
+`if_seq_no`/`if_primary_term`, so concurrent and redelivered events never
+overwrite each other. Its index `keeper-photos` is derived data: when the
+indexer has to create the index, it deletes its durable, and the stream
+replays into the new index.
 
 Handler results map to JetStream actions in `internal/natsx`: success → ack;
 a permanent error (bad payload, a Lightroom 4xx conflict) → term; anything
@@ -124,6 +134,7 @@ Spans in one photo's trace, by service:
 | publisher | `process photo.decided` → `publish` (one per attempt, with the Lightroom HTTP client spans) → `publish photo.published` or `publish photo.failed` |
 | lightroom-mock | server spans named by route, e.g. `PUT /v2/catalogs/{catalog_id}/assets/{asset_id}` |
 | gateway | `process photo.*` for each event it projects |
+| indexer | `process photo.*` → `GET /{index}/_doc/{id}`, `PUT /{index}/_doc/{id}` (Elasticsearch client spans) |
 
 Outside the photo traces: the culler's `burst.decide` span starts its own
 trace and links to every member photo; camera-sim's `shoot <set>` trace (FTP
@@ -158,6 +169,7 @@ cardinality: no sha256, path or file name.
 | gateway | `GET /api/photos?limit=n` | latest photos (default 100, at most 500) |
 | gateway | `GET /api/photos/{sha}` | one photo with burst, siblings, `trace_id`, `trace_url` |
 | gateway | `GET /api/bursts/{id}` | one burst |
+| gateway | `GET /api/search?q=&bucket=&stage=&burst=&limit=n` | photo search in Elasticsearch: `{total, photos}`; `q` in `query_string` syntax (`blur`, `"eyes closed"`, `features.sharpness.score:>0.5`, `attempts:>2`) |
 | gateway | `GET /api/events` | SSE, `event: photo` per change |
 | gateway | `GET /thumbs/{sha}.jpg` | thumbnail |
 | camera-sim | `POST /shoot?set=<name>[&dup=1]`, `GET /sets` | demo driver |

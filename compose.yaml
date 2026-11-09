@@ -54,6 +54,23 @@ services:
       interval: 2s
       retries: 20
 
+  elasticsearch: # search index, derived from the stream (cmd/indexer)
+    image: elasticsearch:9.5.3
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false" # demo only: reachable on the compose network and 127.0.0.1
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   ingest:
     <<: *go-service
     build:
@@ -171,6 +188,20 @@ services:
       lightroom-mock: { condition: service_healthy }
       otel-collector: { condition: service_started }
 
+  indexer:
+    <<: *go-service
+    build:
+      context: .
+      args: { SERVICE: indexer }
+    environment:
+      <<: *otel-env
+      NATS_URL: nats://nats:4222
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+    depends_on:
+      otel-collector: { condition: service_started }
+      nats: { condition: service_started }
+      elasticsearch: { condition: service_healthy }
+
   gateway:
     <<: *go-service
     build:
@@ -185,6 +216,7 @@ services:
       # /admin API. Set DEMO_CONTROLS=0 to hide the panel and 404 the routes.
       DEMO_CONTROLS: ${DEMO_CONTROLS:-1}
       LIGHTROOM_ADMIN_URL: http://lightroom-mock:8080
+      ELASTICSEARCH_URL: http://elasticsearch:9200 # /api/search
     volumes:
       - spool:/spool:ro
     depends_on:
@@ -199,3 +231,4 @@ volumes:
   otelcol-queue:
   nats-data:
   postgres-data:
+  es-data:
