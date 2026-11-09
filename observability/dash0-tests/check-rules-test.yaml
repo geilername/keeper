@@ -1,0 +1,102 @@
+# promtool unit tests for observability/dash0/check-rules/keeper.yaml.
+# apply-dash0.sh extracts the CRD's .spec to keeper-rules.yaml next to this
+# file and runs `promtool test rules`. Series carry otel_metric_name and
+# otel_metric_type the way Dash0 adds them to OTLP metrics.
+#
+# This checks the rule logic and the `for` timing with Prometheus semantics.
+# Dash0 evaluates the same PromQL; it is not run against Dash0 here.
+rule_files:
+  - keeper-rules.yaml
+evaluation_interval: 1m
+
+tests:
+  # Fault demo: Lightroom answers 503 from minute 6 to minute 12 (`0x5` is
+  # six samples, minutes 0 to 5). The publisher retries a few times a minute.
+  # The check is pending once a retry shows up, fires 1 m later, and clears
+  # once the retries stop.
+  - name: publish retries fire after 1 m and clear after the outage
+    interval: 1m
+    input_series:
+      - series: '{__name__="keeper_publish_attempts_total", otel_metric_name="keeper.publish.attempts", otel_metric_type="sum", result="ok"}'
+        values: '0+6x5 30x7 30+6x8'
+      - series: '{__name__="keeper_publish_attempts_total", otel_metric_name="keeper.publish.attempts", otel_metric_type="sum", result="retry"}'
+        values: '0x5 4+4x6 28x8'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Lightroom publish retrying
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: Lightroom publish retrying
+        exp_alerts: []   # pending, not firing yet
+      - eval_time: 7m
+        alertname: Lightroom publish retrying
+        exp_alerts:
+          - exp_labels: { app: keeper, severity: warning }
+            exp_annotations:
+              summary: Lightroom is refusing photos. Keeper is retrying.
+              description: >-
+                8 publish attempts were refused in the last 2 minutes. The
+                photos wait in JetStream and are sent again with backoff; none
+                is lost or sent twice. Publishing resumes on its own once
+                Lightroom answers. If it does not, check Lightroom (in the
+                demo, lightroom-mock's /admin/faults).
+      - eval_time: 17m
+        alertname: Lightroom publish retrying
+        exp_alerts: []
+
+  # Scorer stopped: its backlog grows past 20 and stays there. The culler's
+  # small backlog never fires.
+  - name: consumer backlog fires per consumer after 2 m above 20
+    interval: 1m
+    input_series:
+      - series: '{__name__="keeper_consumer_pending", otel_metric_name="keeper.consumer.pending", otel_metric_type="gauge", consumer="scorer"}'
+        values: '0x2 12 24 36 36 36 36 0x3'
+      - series: '{__name__="keeper_consumer_pending", otel_metric_name="keeper.consumer.pending", otel_metric_type="gauge", consumer="culler"}'
+        values: '5x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Consumer backlog
+        exp_alerts: []   # above 20 since minute 4: pending
+      - eval_time: 6m
+        alertname: Consumer backlog
+        exp_alerts:
+          - exp_labels: { app: keeper, severity: warning, consumer: scorer }
+            exp_annotations:
+              summary: "scorer is behind: 36 messages waiting."
+              description: >-
+                More than 20 messages have waited for the scorer consumer for
+                2 minutes. They stay in JetStream until it catches up; nothing
+                is lost. Check that scorer is running and look at its latest
+                spans for errors.
+      - eval_time: 10m
+        alertname: Consumer backlog
+        exp_alerts: []
+
+  # Six photos a minute take about 12 s (native histogram, schema 0: bucket
+  # (8, 16] s). From minute 6, six more a minute take about 100 s (bucket
+  # (64, 128] s), so p95 rises above 60 s: pending at 6m, firing at 11m.
+  - name: e2e p95 above 60 s fires after 5 m, not before
+    interval: 1m
+    input_series:
+      - series: '{__name__="keeper_photo_e2e_duration_seconds", otel_metric_name="keeper.photo.e2e.duration", otel_metric_type="histogram", test="fast"}'
+        values: '{{schema:0 count:0 sum:0}}+{{schema:0 count:6 sum:72 offset:4 buckets:[6]}}x20'
+      - series: '{__name__="keeper_photo_e2e_duration_seconds", otel_metric_name="keeper.photo.e2e.duration", otel_metric_type="histogram", test="slow"}'
+        values: '_x5 {{schema:0 count:0 sum:0}}+{{schema:0 count:6 sum:600 offset:7 buckets:[6]}}x14'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: Photos slow to reach Lightroom
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: Photos slow to reach Lightroom
+        exp_alerts: []   # pending since 6m
+      - eval_time: 11m
+        alertname: Photos slow to reach Lightroom
+        exp_alerts:
+          - exp_labels: { app: keeper, severity: warning }
+            exp_annotations:
+              summary: Photos take 119 s to reach Lightroom (p95).
+              description: >-
+                For 5 minutes, 1 photo in 20 has taken longer than 60 s from
+                the camera to Lightroom. A burst alone accounts for about 20
+                s. Look at publish retries and consumer backlog on the Keeper
+                pipeline dashboard, then open a slow photo's trace.
