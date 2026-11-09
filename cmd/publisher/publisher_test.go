@@ -64,6 +64,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	p.now = func() time.Time { return h.now }
+	p.ratedDir = filepath.Join(t.TempDir(), "rated")
 	h.p = p
 	return h
 }

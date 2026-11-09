@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -50,6 +54,7 @@ type publisher struct {
 	emit       emitFunc
 	maxDeliver int
 	backoff    []time.Duration // same slice natsx uses for nak delays
+	ratedDir   string          // rated raw copies (RATED_DIR); "" uploads raws as shot
 	now        func() time.Time
 
 	tracer    trace.Tracer
@@ -79,8 +84,18 @@ func newPublisher(lr lightroom.Client, emit emitFunc, cfg natsx.ConsumerConfig,
 	}
 	return &publisher{
 		lr: lr, emit: emit, maxDeliver: cfg.MaxDeliver, backoff: cfg.BackOff, now: time.Now,
-		tracer: tracer, attempts: attempts, photos: photos, duration: duration, albumAdds: albumAdds,
+		ratedDir: ratedDir(),
+		tracer:   tracer, attempts: attempts, photos: photos, duration: duration, albumAdds: albumAdds,
 	}, nil
+}
+
+// ratedDir is RATED_DIR, or keeper-rated in the temp dir. Rated copies are
+// derived and disposable: scratch space, not the spool.
+func ratedDir() string {
+	if d := os.Getenv("RATED_DIR"); d != "" {
+		return d
+	}
+	return filepath.Join(os.TempDir(), "keeper-rated")
 }
 
 // withAlbums turns on the album step (Adobe mode).
@@ -160,6 +175,7 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 			p.record(ctx, span, "retry", "nats", err)
 			return false, fmt.Errorf("publish %s: %w", events.SubjectPublished, err)
 		}
+		p.dropRated(ev.SHA256)
 		p.attempts.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
 		p.photos.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "published")))
 		slog.InfoContext(ctx, "photo published to Lightroom",
@@ -220,37 +236,37 @@ func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.P
 	if err != nil {
 		return spoolError{err}
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return spoolError{err}
+	mt, ok := media.TypeOf(path)
+	if !ok {
+		mt = media.JPEG
 	}
-	defer f.Close()
-	info, err := f.Stat()
+	// What goes up: the raw with Keeper's rating in its XMP when that can
+	// be done in place, else the original as shot. JPEGs go up unchanged.
+	up, err := p.masterFor(ctx, path, mt, ev)
 	if err != nil {
-		return spoolError{err}
+		return err
 	}
+	defer up.f.Close()
 
-	// 1. Create, or get the existing asset (PUT on a sha-derived ID).
+	// 1. Create, or get the existing asset (PUT on an ID derived from the
+	// original's sha256: the photo's identity). The sha256 Lightroom sees
+	// is that of the bytes uploaded.
 	name := ev.FileName // the camera's name; the spool name is only the sha
 	if name == "" {
-		name = info.Name()
+		name = filepath.Base(path)
 	}
 	asset, _, err := p.lr.CreateAsset(ctx, lightroom.NewAsset{
-		ID: assetID, FileName: name, SHA256: ev.SHA256,
+		ID: assetID, FileName: name, SHA256: up.sha,
 	})
 	if err != nil {
 		return err
 	}
 
-	// 2. Upload the original unless these exact bytes are already there.
+	// 2. Upload the master unless these exact bytes are already there.
 	// The server also answers 200 for the same bytes, so this is only a
 	// shortcut for replays, not what makes the step safe.
-	if asset.MasterSHA256 != ev.SHA256 {
-		mt, ok := media.TypeOf(path)
-		if !ok {
-			mt = media.JPEG
-		}
-		if _, err := p.lr.UploadMaster(ctx, assetID, string(mt), f, info.Size()); err != nil {
+	if asset.MasterSHA256 != up.sha {
+		if _, err := p.lr.UploadMaster(ctx, assetID, string(mt), up.f, up.size); err != nil {
 			return err
 		}
 	}
@@ -269,6 +285,121 @@ func (p *publisher) toLightroom(ctx context.Context, assetID string, ev events.P
 
 	// 4. Add the asset to the chosen collection.
 	return p.addToAlbum(ctx, assetID, target)
+}
+
+// master is the file uploaded as the asset's master.
+type master struct {
+	f    *os.File
+	size int64
+	sha  string // hex sha256 of exactly these bytes
+}
+
+// masterFor opens what to upload for the photo at path. For a raw it is a
+// copy with Keeper's rating embedded in the XMP packet
+// (<ratedDir>/<sha>-<rating>.arw): the same rating always gives the same
+// bytes, so a redelivery uploads (or skips) identical bytes. A raw whose
+// packet cannot take the rating goes up as shot, and the span and log say
+// so. A failure to write the copy is retried like an unreadable spool: a
+// raw uploaded without its rating could not get it later.
+func (p *publisher) masterFor(ctx context.Context, path string, mt media.Type, ev events.PhotoDecided) (master, error) {
+	span := trace.SpanFromContext(ctx)
+	if mt == media.ARW && p.ratedDir != "" {
+		rated, err := p.ratedCopy(path, ev)
+		switch {
+		case err == nil:
+			span.SetAttributes(attribute.Bool("keeper.rating.embedded", true),
+				attribute.String("keeper.lightroom.master.sha256", rated.sha))
+			return rated, nil
+		case errors.Is(err, media.ErrCannotEmbed):
+			reason := media.EmbedReason(err)
+			span.SetAttributes(attribute.Bool("keeper.rating.embedded", false),
+				attribute.String("keeper.rating.embed_error", reason))
+			slog.WarnContext(ctx, "rating not embedded in the raw; uploading the original as shot",
+				"sha256", ev.SHA256, "rating", ev.Rating, "reason", reason, "err", err)
+		default:
+			return master{}, spoolError{fmt.Errorf("write rated copy: %w", err)}
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return master{}, spoolError{err}
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return master{}, spoolError{err}
+	}
+	return master{f: f, size: info.Size(), sha: ev.SHA256}, nil
+}
+
+// ratedCopy returns the rated copy of the raw at path, writing it first if
+// it is not there yet (atomically: temp file, then rename).
+func (p *publisher) ratedCopy(path string, ev events.PhotoDecided) (master, error) {
+	final := filepath.Join(p.ratedDir, fmt.Sprintf("%s-%d.arw", ev.SHA256, ev.Rating))
+	if m, err := openHashed(final); err == nil {
+		return m, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return master{}, err
+	}
+
+	src, err := os.Open(path)
+	if err != nil {
+		return master{}, err
+	}
+	defer src.Close()
+	info, err := src.Stat()
+	if err != nil {
+		return master{}, err
+	}
+	if err := os.MkdirAll(p.ratedDir, 0o755); err != nil {
+		return master{}, err
+	}
+	tmp, err := os.CreateTemp(p.ratedDir, ".rating-*")
+	if err != nil {
+		return master{}, err
+	}
+	defer os.Remove(tmp.Name()) // no-op after the rename
+	err = media.EmbedRating(src, info.Size(), ev.Rating, tmp)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return master{}, err
+	}
+	if err := os.Rename(tmp.Name(), final); err != nil {
+		return master{}, err
+	}
+	return openHashed(final)
+}
+
+// openHashed opens path and hashes it, leaving the file at its start.
+func openHashed(path string) (master, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return master{}, err
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		f.Close()
+		return master{}, err
+	}
+	return master{f: f, size: n, sha: hex.EncodeToString(h.Sum(nil))}, nil
+}
+
+// dropRated removes the photo's rated copies once it is published; they
+// are derived and a redelivery writes them again, byte for byte.
+func (p *publisher) dropRated(sha string) {
+	if p.ratedDir == "" {
+		return
+	}
+	matches, _ := filepath.Glob(filepath.Join(p.ratedDir, sha+"-*.arw"))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
 }
 
 // addToAlbum is step 4 in its own span. Already in the collection counts

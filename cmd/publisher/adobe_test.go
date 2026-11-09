@@ -61,6 +61,7 @@ func newAdobeHarness(t *testing.T) *adobeHarness {
 		t.Fatal(err)
 	}
 	p.now = h.p.now
+	p.ratedDir = h.p.ratedDir
 	h.p = p.withAlbums(lr, ah.targets)
 	return ah
 }

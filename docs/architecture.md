@@ -22,8 +22,9 @@ diagram and the trace model summary are in the [README](../README.md#architectur
 5. `culler` holds `photo.scored` messages unacked while their burst window is
    open, then publishes `burst.decided` and one `photo.decided` per member,
    and acks.
-6. `publisher` creates the Lightroom asset, uploads the original and sets the
-   rating (with `LIGHTROOM_MODE=adobe`: and adds it to the collection picked
+6. `publisher` creates the Lightroom asset, uploads the original (a raw with
+   Keeper's rating written into its XMP, see
+   [Ratings in the raw](#ratings-in-the-raw)) and sets the rating (with `LIGHTROOM_MODE=adobe`: and adds it to the collection picked
    in the console; see [Adobe Lightroom](#adobe-lightroom)), then publishes
    `photo.published`. A failed attempt publishes
    `photo.failed` and naks the message for redelivery.
@@ -244,6 +245,36 @@ for the collection itself ends the photo as `album_refused` with the words
 "Lightroom refused collection <name>".
 
 **Ratings.** The Partner API cannot change an asset after it is created
-(there is no PATCH and no rating on create), so in Adobe mode the rating stays
-in Keeper; the `publish` span records `keeper.lightroom.rating_written=false`.
+(there is no PATCH and no rating on create; the `publish` span records
+`keeper.lightroom.rating_written=false`). So the rating travels inside the
+raw: see [Ratings in the raw](#ratings-in-the-raw).
+
+## Ratings in the raw
+
+Before the master upload (in both modes) the publisher writes a copy of an
+ARW original with Keeper's rating in its own XMP packet
+(`media.EmbedRating`) to `RATED_DIR/<sha256>-<rating>.arw` (default
+`$TMPDIR/keeper-rated`; scratch space, the spool stays read-only) and uploads
+that copy.
+
+- A Sony ARW keeps a fixed 4096-byte XMP packet in IFD0 (tag `0x02BC`): RDF
+  content, whitespace padding, `<?xpacket end='w'?>`. The edit happens inside
+  that range only, taking or giving back padding, so the packet keeps its
+  length, no TIFF offset moves, and every byte outside it (IFDs, MakerNote,
+  SubIFDs, previews, sensor data) is identical.
+- `xmp:Rating` is set to Keeper's rating (replaced if the camera wrote one,
+  inserted into the camera's `xmp` Description otherwise). The camera's own
+  rating is kept as `keeper:CameraRating`
+  (`xmlns:keeper='https://github.com/geilername/keeper/ns/1.0/'`).
+- The same original and rating give the same bytes, so a redelivery uploads,
+  or skips, identical bytes. The asset ID still comes from the original's
+  sha256 (the photo's identity); `importSource.sha256` and the "master
+  already there" check use the sha256 of the uploaded copy.
+- No packet, too little padding, a read-only packet or a malformed one: the
+  original is uploaded as shot, the `publish` span has
+  `keeper.rating.embedded=false` and `keeper.rating.embed_error`, and a
+  warning is logged. Failing to write the copy is retried
+  (`spool_unreadable`), so a raw never goes up unrated by accident.
+- JPEG originals are uploaded unchanged.
+- The copy is deleted once the photo is published.
 

@@ -66,6 +66,7 @@ gateway and, for `adobe` mode, on the publisher:
 | `ADOBE_REDIRECT_URI` | gateway | default `https://localhost:8443/auth/lightroom/callback`; must match the console's redirect URI pattern |
 | `KEEPER_TOKEN_KEY` | publisher, gateway | 32 random bytes, base64 (`openssl rand -base64 32`); seals the tokens at rest |
 | `LIGHTROOM_TIMEOUT`, `LIGHTROOM_UPLOAD_TIMEOUT` | publisher | per call and per upload; `adobe` defaults 15 s and 5 min |
+| `RATED_DIR` | publisher | writable scratch for raws with the rating embedded in their XMP (default `$TMPDIR/keeper-rated`); see [Ratings in the raw](docs/architecture.md#ratings-in-the-raw) |
 
 Start everything:
 
