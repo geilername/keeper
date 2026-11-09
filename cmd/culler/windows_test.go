@@ -13,7 +13,7 @@ var (
 	wall0    = time.Date(2026, 11, 9, 13, 0, 0, 0, time.UTC)
 )
 
-var testCfg = windowConfig{Gap: 2 * time.Second, MaxHamming: 12, Idle: 20 * time.Second, MaxWait: 90 * time.Second}
+var testCfg = windowConfig{Gap: 2 * time.Second, TightGap: time.Second, MaxHamming: 12, Idle: 20 * time.Second, MaxWait: 90 * time.Second}
 
 const (
 	hashA     = "f0f0f0f0f0f0f0f0"
@@ -42,9 +42,11 @@ func TestGrouping(t *testing.T) {
 	}{
 		{"close in time, looks alike: same burst", mem("b", 1500*time.Millisecond, hashNearA), joined, 1},
 		{"gap too long: new burst", mem("b", 2500*time.Millisecond, hashA), opened, 2},
-		{"looks different: new burst", mem("b", 500*time.Millisecond, hashFarA), opened, 2},
+		{"continuous shooting, looks different (blur, clipping): same burst", mem("b", 300*time.Millisecond, hashFarA), joined, 1},
+		{"continuous shooting, unreadable dhash: same burst", mem("b", 0, "zz"), joined, 1},
+		{"looser gap, looks different: new burst", mem("b", 1500*time.Millisecond, hashFarA), opened, 2},
+		{"looser gap, unreadable dhash: new burst", mem("b", 1500*time.Millisecond, "zz"), opened, 2},
 		{"captured earlier than the first: same burst", mem("b", -time.Second, hashA), joined, 1},
-		{"unreadable dhash: new burst", mem("b", 0, "zz"), opened, 2},
 		{"same photo redelivered: not counted twice", mem("a", 0, hashA), redelivered, 1},
 	}
 	for _, tt := range tests {

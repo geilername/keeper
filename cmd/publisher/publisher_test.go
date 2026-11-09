@@ -215,21 +215,41 @@ func TestRetryOn503ThenHeal(t *testing.T) {
 	}
 }
 
-func TestLastDeliveryGivesUp(t *testing.T) {
+// A long outage must never exhaust a photo: the demo promises nothing is lost.
+func TestLongOutageNeverGivesUp(t *testing.T) {
 	h := newHarness(t)
 	ev := h.photo(t, "jpeg four")
 	h.lr.Fail(http.StatusServiceUnavailable)
 
-	permanent, err := h.p.attempt(context.Background(), consumerConfig.MaxDeliver, ev)
+	permanent, err := h.p.attempt(context.Background(), 200, ev)
+	if err == nil || permanent {
+		t.Fatalf("permanent=%v err=%v, want a retry", permanent, err)
+	}
+	f := h.last(t).v.(events.PhotoFailed)
+	if f.RetryAt == nil || f.Attempt != 200 {
+		t.Fatalf("photo.failed = %+v, want retry_at", f)
+	}
+	if want := h.now.Add(30 * time.Second); !f.RetryAt.Equal(want) {
+		t.Fatalf("retry_at = %v, want capped backoff %v", f.RetryAt, want)
+	}
+	if n := h.counter(t, "keeper.photos", "outcome", "failed"); n != 0 {
+		t.Fatalf("keeper.photos{failed} = %d, want 0", n)
+	}
+}
+
+// With an explicit limit configured, the last delivery still gives up.
+func TestConfiguredLimitGivesUp(t *testing.T) {
+	h := newHarness(t)
+	h.p.maxDeliver = 8
+	ev := h.photo(t, "jpeg five")
+	h.lr.Fail(http.StatusServiceUnavailable)
+
+	permanent, err := h.p.attempt(context.Background(), 8, ev)
 	if err == nil || !permanent {
 		t.Fatalf("permanent=%v err=%v, want permanent", permanent, err)
 	}
-	f := h.last(t).v.(events.PhotoFailed)
-	if f.RetryAt != nil || f.Attempt != 8 || f.ErrorClass != lightroom.ClassServer {
+	if f := h.last(t).v.(events.PhotoFailed); f.RetryAt != nil {
 		t.Fatalf("photo.failed = %+v, want no retry_at", f)
-	}
-	if n := h.counter(t, "keeper.photos", "outcome", "failed"); n != 1 {
-		t.Fatalf("keeper.photos{failed} = %d", n)
 	}
 }
 

@@ -99,6 +99,9 @@ func configFromEnv() (windowConfig, error) {
 	if cfg.Gap, err = durationEnv("BURST_GAP", 2*time.Second); err != nil {
 		return cfg, err
 	}
+	if cfg.TightGap, err = durationEnv("BURST_TIGHT_GAP", time.Second); err != nil {
+		return cfg, err
+	}
 	if cfg.Idle, err = durationEnv("BURST_IDLE", 20*time.Second); err != nil {
 		return cfg, err
 	}

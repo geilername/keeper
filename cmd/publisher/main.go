@@ -24,14 +24,16 @@ import (
 
 const service = "publisher"
 
-// consumerConfig: 2s, 5s, 15s, 30s, 30s, 30s, 30s between the 8 deliveries,
-// so a photo gives up about 2m20s after its first failed attempt.
+// consumerConfig: 2s, 5s, 15s, then every 30s for as long as Lightroom is
+// down. Retryable errors never exhaust the message (MaxDeliver -1): an outage
+// delays photos, it never drops them. Only permanent errors (a 4xx conflict)
+// end in "not published".
 var consumerConfig = natsx.ConsumerConfig{
 	Durable:       service,
 	FilterSubject: events.SubjectDecided,
 	// AckWait stays at natsx's 30s: one attempt is at most three Lightroom
 	// calls of LIGHTROOM_TIMEOUT (5s) each.
-	MaxDeliver: 8,
+	MaxDeliver: -1,
 	BackOff:    []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second},
 }
 

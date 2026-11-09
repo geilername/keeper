@@ -45,7 +45,7 @@ behaviour is observable, not asserted.
   A burst is decided after 20 s of quiet (or 90 s at most).
 - Pipeline stages a photo passes through: ingested → scored → decided →
   (publishing / retrying) → published, or failed.
-- Faults are part of the story: Lightroom returning 503s for up to two minutes,
+- Faults are part of the story: Lightroom returning 503s for as long as the outage lasts,
   or the scorer stopped. The console must make "waiting" and "retrying"
   legible, and show recovery.
 - Seen on a laptop (often screen-shared or recorded at laptop resolution) and

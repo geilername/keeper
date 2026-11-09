@@ -119,7 +119,7 @@ func (p *publisher) attempt(ctx context.Context, delivered int, ev events.PhotoD
 		p.record(ctx, span, "retry", class, lrErr)
 		return false, lrErr
 	}
-	last := delivered >= p.maxDeliver
+	last := p.maxDeliver > 0 && delivered >= p.maxDeliver // -1: unlimited
 	failed := events.PhotoFailed{V: events.Version, SHA256: ev.SHA256, Attempt: delivered, ErrorClass: class}
 	if retryable && !last {
 		at := p.now().Add(p.backoff[min(delivered, len(p.backoff))-1]).UTC()

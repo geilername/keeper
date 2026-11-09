@@ -19,7 +19,8 @@ import (
 
 type windowConfig struct {
 	Gap        time.Duration // capture-time gap that starts a new burst
-	MaxHamming int           // dhash distance above which a frame starts a new burst
+	TightGap   time.Duration // continuous shooting: frames this close are one burst whatever they look like
+	MaxHamming int           // dhash distance above which a frame starts a new burst (gaps above TightGap only)
 	Idle       time.Duration // close when no member joined for this long
 	MaxWait    time.Duration // close at the latest this long after the first member
 }
@@ -91,15 +92,24 @@ func (w *windows) add(m *member, now time.Time) addResult {
 	return opened
 }
 
-// match finds the open window with a member captured within Gap of f that
-// also looks alike (dhash). The closest capture time wins.
+// match finds the open window with a member captured close to f. The
+// closest capture time wins.
+//
+// Within TightGap (continuous shooting) a frame joins whatever it looks like:
+// a blurred, blinked or badly exposed frame is exactly what culling is for,
+// and blur or clipping moves its dhash. Between TightGap and Gap the frames
+// must also look alike, because the photographer may have turned to a new
+// subject.
 func (w *windows) match(f policy.Frame) *window {
 	var best *window
 	bestGap := w.cfg.Gap + 1
 	for _, win := range w.open {
 		for _, m := range win.members {
 			gap := f.CapturedAt.Sub(m.frame.CapturedAt).Abs()
-			if gap <= w.cfg.Gap && gap < bestGap &&
+			if gap > w.cfg.Gap || gap >= bestGap {
+				continue
+			}
+			if gap <= w.cfg.TightGap ||
 				hamming(f.Features.DHash, m.frame.Features.DHash) <= w.cfg.MaxHamming {
 				best, bestGap = win, gap
 			}

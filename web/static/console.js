@@ -2,7 +2,6 @@
 // Data: GET /api/photos (snapshot list) + SSE /api/events ("photo" events).
 // Rendering is keyed by sha256 and burst, so prints move instead of reloading.
 
-const MAX_ATTEMPTS = 8;          // publisher MaxDeliver
 const BURST_GAP_MS = 2000;       // culler BURST_GAP, for bursts still forming
 const WINDOW_IDLE_MS = 20000;    // culler BURST_IDLE
 const WINDOW_MAX_MS = 90000;     // culler BURST_MAX_WAIT
@@ -281,16 +280,16 @@ function printFor(p, i, g) {
   const where = el('span', 'where');
   if (p.stage === 'retrying') {
     where.classList.add('conflict');
-    where.textContent = `Retrying, ${nextTry(p) || 'waiting'} · attempt ${p.attempts} of ${MAX_ATTEMPTS}`;
+    where.textContent = `Retrying, ${nextTry(p) || 'waiting'} · attempt ${p.attempts}`;
   } else if (p.stage === 'failed') {
     where.classList.add('conflict');
-    where.textContent = `Not published after ${p.attempts} attempts`;
+    where.textContent = 'Not published · Lightroom refused it';
   } else where.textContent = STAGE_WORD[p.stage] || p.stage;
   cap.append(no, bucket, read, where);
 
   const label = [p.file_name || p.sha256.slice(0, 12),
     p.bucket ? `${BUCKET_WORD[p.bucket]}, ${p.rating} stars` : STAGE_WORD[p.stage],
-    p.stage === 'retrying' ? `retrying, attempt ${p.attempts} of ${MAX_ATTEMPTS}` : null].filter(Boolean).join(', ');
+    p.stage === 'retrying' ? `retrying, attempt ${p.attempts}` : null].filter(Boolean).join(', ');
   b.setAttribute('aria-label', label);
   return b;
 }
@@ -344,7 +343,7 @@ function renderStatus(list, now) {
   const retrying = list.filter(p => p.stage === 'retrying').length;
   const queued = list.filter(p => p.stage === 'ingested');
   const oldest = queued.length ? Math.max(...queued.map(p => now - (t(p.ingested_at) || t(p.seen_at)))) : 0;
-  if (failed) return alert(`${plural(failed, 'photo')} not published.`, `Lightroom refused ${failed === 1 ? 'it' : 'them'} ${MAX_ATTEMPTS} times; the original stays in Keeper.`);
+  if (failed) return alert(`${plural(failed, 'photo')} not published.`, `Lightroom refused ${failed === 1 ? 'it' : 'them'}; the original${failed === 1 ? '' : 's'} stay${failed === 1 ? 's' : ''} in Keeper.`);
   if (retrying) return alert('Lightroom is not answering.', `${plural(retrying, 'photo')} retrying; nothing is lost.`);
   if (oldest > STALL_MS) return alert('Waiting for the scorer.', `${plural(queued.length, 'photo')} queued for ${ago(oldest)}.`);
   const last = Math.max(...list.map(p => t(p.seen_at) || 0));
@@ -414,7 +413,7 @@ function renderRecord(now) {
   } else row('Rating', 'pending', 'rated when the burst closes');
   row('Stage', STAGE_WORD[p.stage] || p.stage,
     p.stage === 'retrying' || p.stage === 'failed'
-      ? [p.stage === 'retrying' ? nextTry(p, now) : null, `attempt ${p.attempts} of ${MAX_ATTEMPTS}`, p.last_error].filter(Boolean).join(' · ')
+      ? [p.stage === 'retrying' ? nextTry(p, now) : null, `attempt ${p.attempts}`, p.last_error].filter(Boolean).join(' · ')
       : null);
 
   const f = p.features;
