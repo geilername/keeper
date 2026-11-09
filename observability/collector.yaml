@@ -1,0 +1,57 @@
+# One collector in the middle (ADR-5): services speak OTLP to it, it holds
+# the Dash0 token, limits memory, batches and buffers to disk.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+  resourcedetection:
+    detectors: [env, system]
+    override: false
+  batch:
+    timeout: 2s
+
+exporters:
+  otlphttp/dash0:
+    endpoint: ${env:DASH0_ENDPOINT}
+    headers:
+      Authorization: Bearer ${env:DASH0_AUTH_TOKEN}
+      Dash0-Dataset: ${env:DASH0_DATASET}
+    sending_queue:
+      enabled: true
+      storage: file_storage
+    retry_on_failure:
+      enabled: true
+  debug:
+    verbosity: ${env:COLLECTOR_DEBUG_VERBOSITY}
+
+service:
+  extensions: [health_check, file_storage]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlphttp/dash0, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlphttp/dash0, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlphttp/dash0, debug]

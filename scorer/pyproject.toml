@@ -1,0 +1,27 @@
+[project]
+name = "keeper-scorer"
+version = "0.1.0"
+description = "Keeper scorer: photo.ingested -> image features -> photo.scored"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "nats-py>=2.11",
+    "numpy>=2.2",
+    "opencv-python-headless>=4.11,<5",  # 5.x removed CascadeClassifier + the Haar cascade files
+    "opentelemetry-api>=1.38",
+    "opentelemetry-sdk>=1.38",
+    "opentelemetry-exporter-otlp-proto-http>=1.38",
+]
+
+[project.scripts]
+keeper-scorer = "keeper_scorer.service:main"
+
+[dependency-groups]
+dev = ["pytest>=8.4"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
