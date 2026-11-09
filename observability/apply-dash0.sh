@@ -48,7 +48,11 @@ trap 'rm -rf "$work"' EXIT
 
 offline() { docker run --rm --network none "$@"; }
 yq() { offline -i -v "$assets:/assets:ro" "$YQ_IMAGE" "$@"; }
-promtool() { offline -v "$work:/work:ro" --entrypoint promtool "$PROMETHEUS_IMAGE" "$@"; }
+# The image runs as nobody, but $work is mktemp's 0700 dir; on native Linux
+# Docker the mount keeps that, so run promtool as the dir's owner.
+promtool() {
+  offline --user "$(id -u):$(id -g)" -v "$work:/work:ro" --entrypoint promtool "$PROMETHEUS_IMAGE" "$@"
+}
 
 echo "1/3  Check rules: PromQL syntax and rule unit tests (promtool)"
 # promtool reads plain Prometheus rule files: the CRD's .spec is one.
