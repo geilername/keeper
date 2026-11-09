@@ -370,8 +370,8 @@ One named volume, `spool`, mounted at `/spool`. Every service runs as uid
 ```
 /spool/incoming/<file>           SFTPGo upload target; ingest removes the file once handled
 /spool/photos/<sha256>.<ext>     the original as shot (.jpg or .arw), content-addressed, written once
-/spool/previews/<sha256>.jpg     upright JPEG (long edge ≤ 2048 px) that the scorer analyses
-/spool/thumbs/<sha256>.jpg       480 px thumbnail for the console
+/spool/previews/<sha256>.jpg     upright JPEG (long edge ≤ 2560 px) that the scorer analyses
+/spool/thumbs/<sha256>.webp      480 px WebP thumbnail for the console (older photos: .jpg)
 ```
 
 Ingest accepts JPEG and Sony ARW uploads; other files are acknowledged and

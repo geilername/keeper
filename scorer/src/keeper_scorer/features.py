@@ -13,9 +13,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Long edge of the working image. Big enough for faces and blur, small enough
-# that a 24 MP photo scores in well under a second.
+# Long edge of the working image for sharpness, exposure and the hash. Their
+# scores depend on resolution, and the decision policy's thresholds were set
+# at this size: change it only together with internal/policy.
 WORK_LONG_EDGE = 1024
+
+# Long edge of the image face and eye detection run on. Larger than the
+# working image so that faces at conference distance and the eyes inside them
+# are big enough for the cascades.
+FACE_LONG_EDGE = 2560
 
 # Laplacian variance at which the sharpness score is 0.5. ~100 is the usual
 # "blurry below this" rule of thumb at roughly 1 MP.
