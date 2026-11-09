@@ -50,6 +50,8 @@ Fill in `.env`:
 | `CAMERA_FTP_PASSWORD` | no | FTP password of the `camera` user in SFTPGo, default `camera` |
 | `CONSOLE_PORT` | no | Host port of the console, default `8090` |
 | `COLLECTOR_DEBUG_VERBOSITY` | no | Collector debug exporter: `basic` (default), `normal` or `detailed` |
+| `DEMO_CONTROLS` | no | `1` (default) shows the console's demo fault panel; `0` hides it |
+| `DASH0_API_URL`, `DASH0_API_TOKEN` | no | Only for `observability/apply-dash0.sh`, which applies the dashboard and check rules (see below) |
 
 `LIGHTROOM_MODE` and the `ADOBE_*` lines in `.env.example` are not read by any
 service yet; the publisher always talks to `lightroom-mock`.
@@ -96,6 +98,23 @@ docker compose logs -f otel-collector
 With `detailed`, every span, metric and log record is printed with its
 attributes. The Dash0 exporter keeps logging connection errors and retrying
 from its disk queue; that is expected and does not affect the pipeline.
+
+### Dash0 dashboard and check rules
+
+The dashboard "Keeper pipeline" and three check rules are in
+`observability/dash0/` as code. Validate them offline, then apply them to your
+dataset (Docker only; the tools run from pinned images):
+
+```bash
+observability/apply-dash0.sh --dry-run
+observability/apply-dash0.sh
+```
+
+Applying needs `DASH0_API_URL` (the API endpoint of your region, not the
+`ingress.…` OTLP endpoint) and a `DASH0_API_TOKEN` allowed to write dashboards
+and check rules, from the environment or `.env`. Details, the rules and the
+`DASH0_TRACE_URL` format are in
+[observability/README.md](observability/README.md).
 
 ### Stopping and starting over
 
@@ -177,6 +196,12 @@ docker compose logs otel-collector | grep -A3 <trace_id>
 
 ### 4. Break Lightroom, watch the retries, heal
 
+The console's **Demo controls** panel does this with buttons: *Lightroom 503*,
+*Latency 3 s* and *Heal*, with the mock's asset count, replays and injected
+faults next to Keeper's own published count. The gateway forwards the panel's
+requests to lightroom-mock's admin API (`/api/demo/*`, only while
+`DEMO_CONTROLS=1`). The same steps with curl:
+
 Make every Lightroom API call fail with 503 (the admin endpoints are never
 faulted):
 
@@ -198,8 +223,9 @@ permanent error (a 4xx conflict from Lightroom) ends a photo as "not
 published". In the console the photos show *Retrying* with the attempt count
 and the time of the next try, and the banner says that Lightroom is not
 answering and nothing is lost. In the trace, every failed attempt is a red
-`publish` span. Dash0 check rules for publish failures are being added as
-code (in progress).
+`publish` span. In Dash0, the check rule *Keeper - Lightroom publish retrying*
+fires once retries have been seen for a minute (applied with
+`observability/apply-dash0.sh`).
 
 Heal it (`{}` clears every fault):
 
@@ -330,15 +356,21 @@ One named volume, `spool`, mounted at `/spool`. Every service runs as uid
 1000.
 
 ```
-/spool/incoming/<file>        SFTPGo upload target; ingest removes the file once handled
-/spool/photos/<sha256>.jpg    original, content-addressed, written once by ingest
-/spool/thumbs/<sha256>.jpg    480 px thumbnail for the console, written by ingest
+/spool/incoming/<file>           SFTPGo upload target; ingest removes the file once handled
+/spool/photos/<sha256>.<ext>     the original as shot (.jpg or .arw), content-addressed, written once
+/spool/previews/<sha256>.jpg     upright JPEG (long edge ≤ 2048 px) that the scorer analyses
+/spool/thumbs/<sha256>.jpg       480 px thumbnail for the console
 ```
 
-`ingest` is the only writer of `photos/` and `thumbs/`; `scorer`, `publisher`
-and `gateway` mount the volume read-only. On `main`, ingest accepts JPEG
-uploads only (other files are acknowledged and ignored); support for Sony ARW
-raw files is in progress.
+Ingest accepts JPEG and Sony ARW uploads; other files are acknowledged and
+ignored. For an ARW it extracts the embedded JPEG preview, so the scorer reads
+`previews/` while the publisher uploads the original from `photos/`. `ingest`
+is the only writer of `photos/`, `previews/` and `thumbs/`; `scorer`,
+`publisher` and `gateway` mount the volume read-only.
+
+No raw files are in the repository (`*.arw` and other raw and sidecar
+formats are gitignored). To try your own, put them in a set directory under
+`demo/sets/`: camera-sim uploads `.jpg`, `.jpeg` and `.arw` files.
 
 ## Repository layout
 
