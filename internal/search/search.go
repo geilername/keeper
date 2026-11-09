@@ -138,6 +138,15 @@ func (c *Client) Ping(ctx context.Context) error {
 	return err
 }
 
+// IndexExists reports whether index exists.
+func (c *Client) IndexExists(ctx context.Context, index string) (bool, error) {
+	status, err := c.do(ctx, "index_exists", http.MethodHead, "/{index}", "/"+url.PathEscape(index), nil, nil)
+	if status == http.StatusNotFound {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // EnsureIndex creates index with body unless it exists. created is true
 // only when this call created it.
 func (c *Client) EnsureIndex(ctx context.Context, index, body string) (created bool, err error) {

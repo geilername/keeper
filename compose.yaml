@@ -66,7 +66,8 @@ services:
     ports:
       - "127.0.0.1:9200:9200"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s"]
+      # Quoted: an unquoted & would background curl and the check would always pass.
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s'"]
       interval: 5s
       timeout: 5s
       retries: 30

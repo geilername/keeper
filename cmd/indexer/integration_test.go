@@ -52,29 +52,43 @@ func TestIntegrationStreamToIndex(t *testing.T) {
 		BurstID: "b42", Bucket: events.BucketReject, Rating: 1,
 		Reasons: []string{"eyes closed", "motion blurred (sharpness 0.11, sharpest in burst 0.59)"}})
 
-	if err := ensureIndex(ctx, es, js); err != nil {
-		t.Fatal(err)
-	}
-	runCtx, stop := context.WithCancel(ctx)
-	done := make(chan error, 1)
-	go func() { done <- (&indexer{es: es, now: time.Now}).run(runCtx, js) }()
-	defer func() { stop(); <-done }()
-
-	var p photostate.Photo
-	for {
-		_, found, err := es.Get(ctx, search.PhotosIndex, sha, &p)
-		if err != nil {
+	start := func() (stop func()) {
+		if err := ensureIndex(ctx, es, js); err != nil {
 			t.Fatal(err)
 		}
-		if found && p.Stage == photostate.StageDecided {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("photo not indexed as decided: found=%v %+v", found, p)
-		case <-time.After(200 * time.Millisecond):
+		runCtx, cancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() { done <- (&indexer{es: es, now: time.Now}).run(runCtx, js) }()
+		return func() { cancel(); <-done }
+	}
+	waitDecided := func() photostate.Photo {
+		var p photostate.Photo
+		for {
+			_, found, err := es.Get(ctx, search.PhotosIndex, sha, &p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found && p.Stage == photostate.StageDecided {
+				return p
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("photo not indexed as decided: found=%v %+v", found, p)
+			case <-time.After(200 * time.Millisecond):
+			}
 		}
 	}
+
+	stop := start()
+	waitDecided()
+
+	// Rebuild: with the durable caught up, deleting the index and starting
+	// again must replay the stream into the new index.
+	stop()
+	deleteIndex(t, esURL)
+	stop = start()
+	defer stop()
+	p := waitDecided()
 	if p.FileName != "DSC0042.ARW" || p.Features == nil || p.BurstID != "b42" {
 		t.Errorf("document = %+v", p)
 	}

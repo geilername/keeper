@@ -37,32 +37,44 @@ type indexer struct {
 	now func() time.Time
 }
 
-// ensureIndex waits for Elasticsearch and creates the photos index. When it
-// had to create the index (first start, or someone deleted it to rebuild),
-// it also deletes the durable, so the next consume starts at the beginning
-// of the stream and refills the index from history.
+// ensureIndex waits for Elasticsearch and makes sure the photos index
+// exists. When it is missing (first start, or someone deleted it to
+// rebuild), the durable is deleted first and the index created after, so
+// the next consume starts at the beginning of the stream and refills the
+// index from history.
+//
+// The order matters: the missing index is the only record that a replay is
+// due. A failed reset or a crash before the index is created leaves it
+// missing, and the next attempt resets again.
 func ensureIndex(ctx context.Context, es *search.Client, js jetstream.JetStream) error {
 	for {
-		created, err := es.EnsureIndex(ctx, search.PhotosIndex, search.PhotosMapping)
+		err := resetIfMissing(ctx, es, js)
 		if err == nil {
-			if !created {
-				return nil
-			}
-			slog.InfoContext(ctx, "created index, replaying the stream", "index", search.PhotosIndex)
-			err = js.DeleteConsumer(ctx, events.Stream, durable)
-			if err == nil || errors.Is(err, jetstream.ErrConsumerNotFound) ||
-				errors.Is(err, jetstream.ErrStreamNotFound) {
-				return nil
-			}
-			return fmt.Errorf("reset consumer %s: %w", durable, err)
+			return nil
 		}
-		slog.WarnContext(ctx, "elasticsearch not ready", "err", err)
+		slog.WarnContext(ctx, "index not ready", "err", err)
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("create index: %w", err)
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+func resetIfMissing(ctx context.Context, es *search.Client, js jetstream.JetStream) error {
+	exists, err := es.IndexExists(ctx, search.PhotosIndex)
+	if err != nil || exists {
+		return err
+	}
+	slog.InfoContext(ctx, "index missing, replaying the stream", "index", search.PhotosIndex)
+	err = js.DeleteConsumer(ctx, events.Stream, durable)
+	if err != nil && !errors.Is(err, jetstream.ErrConsumerNotFound) &&
+		!errors.Is(err, jetstream.ErrStreamNotFound) {
+		return fmt.Errorf("reset consumer %s: %w", durable, err)
+	}
+	// Created by someone else in between is fine: the durable is reset.
+	_, err = es.EnsureIndex(ctx, search.PhotosIndex, search.PhotosMapping)
+	return err
 }
 
 // run consumes every photo event until ctx ends. Like the gateway's read

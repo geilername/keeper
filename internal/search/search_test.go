@@ -63,3 +63,16 @@ func TestEnsureIndexExisting(t *testing.T) {
 		t.Errorf("created=%v err=%v", created, err)
 	}
 }
+
+func TestIndexExists(t *testing.T) {
+	for _, tt := range []struct {
+		status int
+		exists bool
+		err    bool
+	}{{200, true, false}, {404, false, false}, {503, false, true}} {
+		exists, err := serve(t, tt.status, "").IndexExists(context.Background(), PhotosIndex)
+		if exists != tt.exists || (err != nil) != tt.err {
+			t.Errorf("status %d: exists=%v err=%v", tt.status, exists, err)
+		}
+	}
+}
