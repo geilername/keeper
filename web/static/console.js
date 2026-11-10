@@ -601,6 +601,9 @@ function readForm() {
 // runSearch asks the gateway; quiet is a background refresh, which keeps
 // the results on screen instead of saying "Searching…".
 async function runSearch({ quiet = false } = {}) {
+  // A refresh that overtakes the photographer's pending search answers for
+  // it, errors included.
+  if (search.busy) quiet = false;
   const seq = ++search.seq;
   if (!search.active) {
     Object.assign(search, { shas: [], total: 0, error: null, busy: false });
