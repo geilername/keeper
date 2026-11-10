@@ -1,5 +1,6 @@
 // Keeper console: live exposure record of the shoot.
-// Data: GET /api/photos (snapshot list) + SSE /api/events ("photo" events).
+// Data: GET /api/photos (snapshot list) + SSE /api/events ("photo" events);
+// search: GET /api/search (Elasticsearch) with the same snapshot shape.
 // Rendering is keyed by sha256 and burst, so prints move instead of reloading.
 
 import { startDemo } from './demo.js';
@@ -20,6 +21,12 @@ const photos = new Map();        // sha → snapshot
 const fresh = new Set();         // shas that arrived live: develop them once
 const printEls = new Map();      // sha → <button>
 const burstEls = new Map();      // burst key → <section>
+const found = new Map();         // sha → snapshot, from the last search
+const foundEls = new Map();      // sha → <button> in the results
+// The search on screen. active: a query or filter is set, and its results
+// replace the bursts. seq drops answers to searches that were overtaken.
+const search = { active: false, q: '', bucket: '', stage: '', shas: [], total: 0, error: null, busy: false, seq: 0 };
+const lookup = sha => photos.get(sha) || found.get(sha);
 let selected = null;
 let userChose = false;
 let connected = false;
@@ -179,6 +186,7 @@ function render() {
   renderStatus(list, now);
 
   const root = $('bursts');
+  root.classList.toggle('searching', search.active);
   $('empty').hidden = list.length > 0;
   const keep = new Set();
   groups.forEach((g, i) => {
@@ -193,13 +201,17 @@ function render() {
     renderBurstHead(sec.firstChild, g, now);
     const prints = sec.lastChild;
     g.photos.forEach((p, j) => place(prints, printFor(p, j, g), j));
-    place(root, sec, i + 1); // index 0 is the empty-state block
+    place(root, sec, i + 2); // index 0 is the results, 1 the empty-state block
   });
   for (const [k, sec] of burstEls) if (!keep.has(k)) { sec.remove(); burstEls.delete(k); }
 
-  if (!userChose || !photos.has(selected)) {
+  renderFound(now);
+
+  // Until the photographer picks a print, the record follows what is on
+  // screen: the top search result, or the newest burst's best frame.
+  if (!userChose || !lookup(selected)) {
     const g = groups[0];
-    selected = g ? (g.best || g.photos.at(-1)).sha256 : null;
+    selected = search.active ? search.shas[0] ?? null : g ? (g.best || g.photos.at(-1)).sha256 : null;
   }
   markSelected();
   renderRecord(now);
@@ -241,8 +253,10 @@ function renderBurstHead(head, g, now) {
   if (!retrying && !failed) state.append(' · ', published === g.photos.length ? 'all in Lightroom' : `${published} of ${g.photos.length} in Lightroom`);
 }
 
-function printFor(p, i, g) {
-  let b = printEls.get(p.sha256);
+// The print element: the photo in its mask and an empty caption. One per
+// photo and view (bursts, results), so each view keeps its own node.
+function printShell(p, cache) {
+  let b = cache.get(p.sha256);
   if (!b) {
     b = el('button', 'print');
     b.type = 'button';
@@ -256,20 +270,47 @@ function printFor(p, i, g) {
     frame.append(img);
     b.append(frame, el('span', 'cap'));
     b.addEventListener('click', () => select(p.sha256, true));
-    printEls.set(p.sha256, b);
+    cache.set(p.sha256, b);
   }
+  b.classList.toggle('reject', p.bucket === 'reject');
+  return b;
+}
+
+function bucketStamp(p) {
+  const bucket = el('span', 'bucket ' + (p.bucket || 'pending'));
+  if (p.bucket) bucket.append(BUCKET_WORD[p.bucket] + ' ' + p.rating, svgUse('i-star'));
+  else bucket.append(p.stage === 'ingested' ? 'Scoring' : 'Scored');
+  return bucket;
+}
+
+// Where the photo is; a conflict is led by the cross-hatch mark.
+function whereLine(p) {
+  const where = el('span', 'where');
+  if (p.stage === 'retrying') {
+    where.classList.add('conflict');
+    where.textContent = `Retrying, ${nextTry(p) || 'waiting'} · attempt ${p.attempts}`;
+  } else if (p.stage === 'failed') {
+    where.classList.add('conflict');
+    where.textContent = 'Not published · Lightroom refused it';
+  } else where.textContent = STAGE_WORD[p.stage] || p.stage;
+  return where;
+}
+
+function printLabel(p) {
+  return [p.file_name || p.sha256.slice(0, 12),
+    p.bucket ? `${BUCKET_WORD[p.bucket]}, ${p.rating} stars` : STAGE_WORD[p.stage],
+    p.stage === 'retrying' ? `retrying, attempt ${p.attempts}` : null].filter(Boolean).join(', ');
+}
+
+function printFor(p, i, g) {
+  const b = printShell(p, printEls);
   if (fresh.has(p.sha256)) {
     b.classList.remove('fresh'); void b.offsetWidth; b.classList.add('fresh');
   }
-  b.classList.toggle('reject', p.bucket === 'reject');
 
   const cap = b.lastChild;
   cap.replaceChildren();
   const no = el('span', 'no', frameNo(p, i));
-  const bucket = el('span', 'bucket ' + (p.bucket || 'pending'));
-  if (p.bucket) {
-    bucket.append(BUCKET_WORD[p.bucket] + ' ' + p.rating, svgUse('i-star'));
-  } else bucket.append(p.stage === 'ingested' ? 'Scoring' : 'Scored');
   const read = el('span', 'read');
   const f = p.features;
   const ref = g.ref;
@@ -281,20 +322,23 @@ function printFor(p, i, g) {
     read.append(stops(evOf(f), 'EV'));
   } else read.append('—');
   if (f?.eyes?.state === 'closed') read.append(' · eyes closed');
-  const where = el('span', 'where');
-  if (p.stage === 'retrying') {
-    where.classList.add('conflict');
-    where.textContent = `Retrying, ${nextTry(p) || 'waiting'} · attempt ${p.attempts}`;
-  } else if (p.stage === 'failed') {
-    where.classList.add('conflict');
-    where.textContent = 'Not published · Lightroom refused it';
-  } else where.textContent = STAGE_WORD[p.stage] || p.stage;
-  cap.append(no, bucket, read, where);
+  cap.append(no, bucketStamp(p), read, whereLine(p));
+  b.setAttribute('aria-label', printLabel(p));
+  return b;
+}
 
-  const label = [p.file_name || p.sha256.slice(0, 12),
-    p.bucket ? `${BUCKET_WORD[p.bucket]}, ${p.rating} stars` : STAGE_WORD[p.stage],
-    p.stage === 'retrying' ? `retrying, attempt ${p.attempts}` : null].filter(Boolean).join(', ');
-  b.setAttribute('aria-label', label);
+// A search result: outside its burst there is no reference frame for
+// readings, so the caption gives the file name and the first reason
+// instead; the record sheet has the readings.
+function resultFor(p) {
+  const b = printShell(p, foundEls);
+  const cap = b.lastChild;
+  cap.replaceChildren();
+  const name = el('span', 'no name', p.file_name || p.sha256.slice(0, 12));
+  const why = el('span', 'why', p.reasons?.[0] || 'Not decided yet');
+  if (p.reasons?.length > 1) why.append(el('span', 'more', ` +${p.reasons.length - 1}`));
+  cap.append(name, bucketStamp(p), why, whereLine(p));
+  b.setAttribute('aria-label', printLabel(p));
   return b;
 }
 
@@ -372,12 +416,13 @@ function select(sha, byUser) {
 const narrow = matchMedia('(max-width: 1080px)');
 function markSelected() {
   const show = userChose || !narrow.matches;
-  for (const [s, b] of printEls) b.setAttribute('aria-pressed', String(show && s === selected));
+  for (const cache of [printEls, foundEls])
+    for (const [s, b] of cache) b.setAttribute('aria-pressed', String(show && s === selected));
 }
 
 let shownSha = null;
 function renderRecord(now) {
-  const p = photos.get(selected);
+  const p = lookup(selected);
   $('record').hidden = !p;
   $('sheet-empty').hidden = !!p;
   if (!p) return;
@@ -489,6 +534,170 @@ function renderJourney(p, now) {
   box.append(bar, ol);
 }
 
+// ── search ────────────────────────────────────────────────
+const BUCKET_FILTER = { best: 'best frames', keeper: 'keepers', reject: 'rejects' };
+
+function renderFound(now) {
+  const box = $('found');
+  box.hidden = !search.active;
+  if (!search.active) return;
+
+  const n = search.shas.length;
+  const title = $('found-title');
+  const note = $('found-note');
+  note.hidden = true;
+  note.classList.remove('alert');
+  if (search.error) {
+    title.textContent = search.error.head;
+    note.textContent = search.error.text;
+    note.classList.add('alert');
+    note.hidden = false;
+  } else if (search.busy && !n) {
+    title.textContent = 'Searching…';
+  } else if (!n) {
+    title.textContent = 'No photos match';
+    note.textContent = search.q
+      ? 'Words match the reasons Keeper gives, like blur or "eyes closed". Check the spelling, or set rating and stage back to any.'
+      : 'No photo has this rating and stage right now.';
+    note.hidden = false;
+  } else {
+    title.textContent = n < search.total
+      ? `${n} of ${plural(search.total, 'photo')} found, best matches first`
+      : `${plural(n, 'photo')} found`;
+  }
+
+  const forWhat = $('found-for');
+  forWhat.replaceChildren();
+  const parts = [];
+  if (search.q) { const f = document.createDocumentFragment(); f.append('for ', el('code', null, search.q)); parts.push(f); }
+  if (search.bucket) parts.push(BUCKET_FILTER[search.bucket]);
+  if (search.stage) parts.push((STAGE_WORD[search.stage] || search.stage).toLowerCase());
+  parts.forEach((x, i) => forWhat.append(...(i ? [' · ', x] : [x])));
+
+  const grid = $('found-prints');
+  const keep = new Set();
+  search.shas.forEach((sha, i) => {
+    const p = lookup(sha);
+    if (!p) return;
+    keep.add(sha);
+    place(grid, resultFor(p), i);
+  });
+  for (const [sha, b] of foundEls) if (!keep.has(sha)) { b.remove(); foundEls.delete(sha); }
+}
+
+function readForm() {
+  search.q = $('find-q').value.trim();
+  search.bucket = $('find-bucket').value;
+  search.stage = $('find-stage').value;
+  search.active = Boolean(search.q || search.bucket || search.stage);
+  // Keep the search in the address, so a reload or a shared link shows it.
+  const url = new URL(location.href);
+  for (const k of ['q', 'bucket', 'stage']) {
+    if (search[k]) url.searchParams.set(k, search[k]); else url.searchParams.delete(k);
+  }
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+}
+
+// runSearch asks the gateway; quiet is a background refresh, which keeps
+// the results on screen instead of saying "Searching…".
+async function runSearch({ quiet = false } = {}) {
+  const seq = ++search.seq;
+  if (!search.active) {
+    Object.assign(search, { shas: [], total: 0, error: null, busy: false });
+    found.clear();
+    schedule();
+    return;
+  }
+  if (!quiet) { search.busy = true; search.error = null; schedule(); }
+  const params = new URLSearchParams({ limit: '100' });
+  for (const k of ['q', 'bucket', 'stage']) if (search[k]) params.set(k, search[k]);
+  let error = null, data = null;
+  try {
+    const res = await fetch('/api/search?' + params);
+    if (res.ok) data = await res.json();
+    else {
+      const text = (await res.text()).trim().replace(/^bad query:\s*/, '');
+      error = res.status === 400
+        ? { head: 'Keeper could not read that search', text: `${text}. Words in quotes match a phrase; a field search looks like stage:retrying.` }
+        : { head: 'Search is not available right now', text: 'The search index is not answering. The live flow is not affected; clear the search to return to it.' };
+    }
+  } catch {
+    error = { head: 'Search is not available right now', text: 'Keeper did not answer. Check the connection; the search runs again on the next update.' };
+  }
+  if (seq !== search.seq) return; // a newer search is on its way
+  search.busy = false;
+  if (error) {
+    if (!quiet) { search.error = error; search.shas = []; found.clear(); }
+  } else {
+    search.error = null;
+    found.clear();
+    for (const p of data.photos) found.set(p.sha256, p);
+    search.shas = data.photos.map(p => p.sha256);
+    search.total = data.total;
+  }
+  schedule();
+}
+
+// New events can change who matches; ask again once the index has caught up.
+let refreshTimer = 0;
+function refreshSearch() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => runSearch({ quiet: true }), 2500);
+}
+
+function submitSearch() {
+  readForm();
+  userChose = false; // the record follows the top result
+  runSearch();
+}
+
+async function startSearch() {
+  // Without Elasticsearch configured the gateway answers 503 with "not
+  // configured": then there is no search, and no line for it.
+  try {
+    const res = await fetch('/api/search?limit=1');
+    if (res.status === 503 && /not configured/.test(await res.text())) return;
+  } catch { /* the gateway is restarting: show the line anyway */ }
+
+  const form = $('find');
+  const q = $('find-q');
+  const params = new URLSearchParams(location.search);
+  q.value = params.get('q') || '';
+  $('find-bucket').value = params.get('bucket') || '';
+  $('find-stage').value = params.get('stage') || '';
+  form.hidden = false;
+
+  form.addEventListener('submit', e => { e.preventDefault(); submitSearch(); });
+  for (const id of ['find-bucket', 'find-stage']) $(id).addEventListener('change', submitSearch);
+  // Emptying the field (typing, or the field's own clear) returns to the flow.
+  q.addEventListener('input', () => { if (!q.value && search.q) submitSearch(); });
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && q.value) { e.stopPropagation(); q.value = ''; submitSearch(); }
+  });
+  $('find-try').addEventListener('click', e => {
+    const b = e.target.closest('button[data-q]');
+    if (!b) return;
+    q.value = b.dataset.q;
+    submitSearch();
+  });
+  $('found-clear').addEventListener('click', () => {
+    form.reset();
+    submitSearch();
+    q.focus();
+  });
+  // "/" jumps to the search field from anywhere but another field.
+  document.addEventListener('keydown', e => {
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.target.closest?.('input, select, textarea, [contenteditable]')) return;
+    e.preventDefault();
+    q.focus();
+    q.select();
+  });
+
+  readForm();
+  if (search.active) runSearch();
+}
+
 // ── data ──────────────────────────────────────────────────
 async function load() {
   try {
@@ -511,6 +720,8 @@ function connect() {
     const p = JSON.parse(e.data);
     if (!photos.has(p.sha256)) fresh.add(p.sha256);
     photos.set(p.sha256, { ...photos.get(p.sha256), ...p });
+    if (found.has(p.sha256)) found.set(p.sha256, { ...found.get(p.sha256), ...p });
+    if (search.active) refreshSearch();
     schedule();
   });
 }
@@ -528,6 +739,9 @@ const demoRender = startDemo(() => {
 
 // Where published photos go: Adobe connection and target collection.
 startLightroom();
+
+// Search over every photo the index holds, not only the last 200.
+startSearch();
 
 setInterval(schedule, 1000); // countdowns and "ago" lines
 connect();

@@ -15,6 +15,7 @@
   <symbol id="i-out" viewBox="0 0 16 16"><path d="M6 3H3v10h10v-3M9 3h4v4M13 3L7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
   <symbol id="i-chev" viewBox="0 0 12 12"><path d="M4 2.5L7.5 6 4 9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
   <symbol id="i-close" viewBox="0 0 16 16"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-find" viewBox="0 0 16 16"><circle cx="6.75" cy="6.75" r="4.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 10l4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"/></symbol>
 </svg>
 
 <header class="top">
@@ -79,8 +80,56 @@
   </div>
 </details>
 
+<!-- Search over every photo Keeper has seen (Elasticsearch, via the
+     gateway's /api/search). While a search is active its results take the
+     place of the bursts; the stage ramp and status stay live above. -->
+<form class="find" id="find" role="search" aria-label="Find photos" hidden>
+  <label class="legend" for="find-q">Find</label>
+  <input class="find-q" id="find-q" name="q" type="search" autocomplete="off" spellcheck="false"
+         placeholder="Words from the reasons, like eyes closed" aria-describedby="find-try">
+  <span class="find-filters">
+  <span class="select find-sel">
+    <select id="find-bucket" name="bucket" aria-label="Rating">
+      <option value="">Any rating</option>
+      <option value="best">Best, 5 stars</option>
+      <option value="keeper">Keeper, 3 stars</option>
+      <option value="reject">Reject, 1 star</option>
+    </select>
+    <svg width="12" height="12" aria-hidden="true"><use href="#i-chev"/></svg>
+  </span>
+  <span class="select find-sel">
+    <select id="find-stage" name="stage" aria-label="Stage">
+      <option value="">Any stage</option>
+      <option value="ingested">Waiting for scorer</option>
+      <option value="scored">In burst window</option>
+      <option value="decided">Decided</option>
+      <option value="retrying">Retrying</option>
+      <option value="failed">Not published</option>
+      <option value="published">In Lightroom</option>
+    </select>
+    <svg width="12" height="12" aria-hidden="true"><use href="#i-chev"/></svg>
+  </span>
+  </span>
+  <button class="act find-go" type="submit"><span>Find</span><span class="cell"><svg width="16" height="16" aria-hidden="true"><use href="#i-find"/></svg></span></button>
+  <p class="find-try" id="find-try">Try
+    <button type="button" data-q='"eyes closed"'>"eyes closed"</button>
+    <button type="button" data-q="blur">blur</button>
+    <button type="button" data-q="attempts:>1">attempts:&gt;1</button>
+    <button type="button" data-q="features.sharpness.score:>0.5">features.sharpness.score:&gt;0.5</button>
+  </p>
+</form>
+
 <main class="work">
   <section class="bursts" id="bursts" aria-label="Bursts, newest first">
+    <section class="found" id="found" aria-labelledby="found-title" hidden>
+      <header class="burst-head found-head">
+        <h2 id="found-title" aria-live="polite"></h2>
+        <span class="span" id="found-for"></span>
+        <span class="state"><button class="found-clear" id="found-clear" type="button">Clear search</button></span>
+      </header>
+      <p class="found-note" id="found-note" hidden></p>
+      <div class="prints" id="found-prints"></div>
+    </section>
     <div class="empty" id="empty" hidden>
       <h2>Waiting for the first upload</h2>
       <p>Photos from the camera appear here as they arrive, grouped into bursts and rated once each burst closes.</p>

@@ -65,7 +65,8 @@ behaviour is observable, not asserted.
 - Served by the `gateway` service: static HTML, CSS and vanilla JS modules in
   `web/static/`, embedded with `go:embed`. No build step, no framework.
 - Data: `GET /api/photos`, `GET /api/photos/{sha}` (with burst siblings and
-  `trace_url`), `GET /api/bursts/{id}`, live updates over SSE at
+  `trace_url`), `GET /api/bursts/{id}`, `GET /api/search` (Elasticsearch over
+  every photo, by reason, rating and stage), live updates over SSE at
   `/api/events`, thumbnails at `/thumbs/{sha}.jpg` (480 px long edge).
 - Per photo the console knows: file name, capture time, stage, scorer
   features (sharpness, exposure, eyes, dhash), burst, bucket, rating, reasons,
