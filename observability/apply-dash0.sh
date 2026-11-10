@@ -92,7 +92,8 @@ app_url() {
 trace_url_hint() {
   local app; app=$(app_url)
   echo "Trace deep link for .env (see observability/README.md):"
-  echo "  DASH0_TRACE_URL=$app/goto/traces/explorer?dataset=${DASH0_DATASET:-<dataset>}&trace_id={trace_id}"
+  echo "  DASH0_TRACE_URL=$app/traces/explorer?org=<org-id>&s={dash0_state}"
+  echo "  (<org-id>: the org= value in the address bar of any Dash0 page)"
 }
 
 if $dry_run; then

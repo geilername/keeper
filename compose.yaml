@@ -212,7 +212,8 @@ services:
       <<: *otel-env
       NATS_URL: nats://nats:4222
       DATABASE_URL: postgres://keeper:keeper@postgres:5432/keeper
-      DASH0_TRACE_URL: ${DASH0_TRACE_URL:-} # template with {trace_id}
+      DASH0_TRACE_URL: ${DASH0_TRACE_URL:-} # template, see .env.example
+      DASH0_DATASET: ${DASH0_DATASET:-keeper-demo} # part of the Dash0 view state
       # Console fault panel (demo only): proxies /api/demo/* to lightroom-mock's
       # /admin API. Set DEMO_CONTROLS=0 to hide the panel and 404 the routes.
       DEMO_CONTROLS: ${DEMO_CONTROLS:-1}
