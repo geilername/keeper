@@ -608,7 +608,12 @@ async function runSearch({ quiet = false } = {}) {
     schedule();
     return;
   }
-  if (!quiet) { search.busy = true; search.error = null; schedule(); }
+  if (!quiet) {
+    // A new search: the old results must not stand under the new query.
+    Object.assign(search, { busy: true, error: null, shas: [], total: 0 });
+    found.clear();
+    schedule();
+  }
   const params = new URLSearchParams({ limit: '100' });
   for (const k of ['q', 'bucket', 'stage']) if (search[k]) params.set(k, search[k]);
   let error = null, data = null;
@@ -638,11 +643,21 @@ async function runSearch({ quiet = false } = {}) {
   schedule();
 }
 
-// New events can change who matches; ask again once the index has caught up.
+// New events can change who matches; ask again once the index has caught
+// up (2.5 s after the last event). During a shoot events never pause that
+// long, so a refresh is also due at most 6 s after the first unrefreshed one.
+const REFRESH_QUIET_MS = 2500;
+const REFRESH_MAX_MS = 6000;
 let refreshTimer = 0;
+let refreshDue = 0;
 function refreshSearch() {
+  const now = Date.now();
+  if (!refreshDue) refreshDue = now + REFRESH_MAX_MS;
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => runSearch({ quiet: true }), 2500);
+  refreshTimer = setTimeout(() => {
+    refreshDue = 0;
+    runSearch({ quiet: true });
+  }, Math.max(0, Math.min(REFRESH_QUIET_MS, refreshDue - now)));
 }
 
 function submitSearch() {
