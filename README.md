@@ -178,8 +178,11 @@ The same data as JSON:
 curl -s http://127.0.0.1:8090/api/photos | jq -r '.[] | [.file_name, .stage, .bucket, .rating, .trace_id] | @tsv'
 ```
 
-Search the reasons and readings (Elasticsearch `query_string` syntax; `bucket`,
-`stage` and `burst` are exact filters):
+The console's **Find** line searches every photo Keeper has seen: words from the
+reasons (`blur`, `"eyes closed"`), a rating and a stage; results replace the
+bursts until you clear the search, while the stage ramp stays live. Press `/`
+to jump to it. The same search as JSON (Elasticsearch `query_string` syntax;
+`bucket`, `stage` and `burst` are exact filters):
 
 ```bash
 curl -s 'http://127.0.0.1:8090/api/search?q=blur' | jq -r '.photos[] | [.file_name, .bucket, .reasons[0]] | @tsv'
